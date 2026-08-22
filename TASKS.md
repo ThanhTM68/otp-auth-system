@@ -41,7 +41,7 @@
 - [x] DbContext
 - [x] Entity configuration
 - [x] Migration
-- [ ] Database initialization
+- [x] Database initialization
 
 ---
 
