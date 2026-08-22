@@ -1,0 +1,25 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Secrets / local configuration
+.env
+.env.*
+appsettings.Development.json
+
+# IDE
+.vscode/
+.idea/
+
+# Test
+TestResults/
+coverage/
+
+# Codex / planning files không muốn đưa lên GitHub
+docs/
+AGENTS.md
+PROJECT_BRIEF.md
+SECURITY_REQUIREMENTS.md
+TASKS.md
