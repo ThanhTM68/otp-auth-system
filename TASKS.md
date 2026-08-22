@@ -35,12 +35,12 @@
 
 ## PHASE 2 - Database
 
-- [ ] User entity
-- [ ] OtpChallenge entity
-- [ ] AuditLog entity
-- [ ] DbContext
-- [ ] Entity configuration
-- [ ] Migration
+- [x] User entity
+- [x] OtpChallenge entity
+- [x] AuditLog entity
+- [x] DbContext
+- [x] Entity configuration
+- [x] Migration
 - [ ] Database initialization
 
 ---

@@ -53,12 +53,13 @@ erDiagram
     AUDIT_LOGS {
         bigint Id PK
         varchar EventType
-        datetimeoffset OccurredAt
+        datetimeoffset CreatedAt
         uniqueidentifier UserId "nullable"
         uniqueidentifier OtpChallengeId "nullable"
-        varchar Outcome
+        bit Success
         varchar ReasonCode "nullable"
         varchar IpAddress "nullable"
+        nvarchar UserAgent "nullable"
         varchar CorrelationId "nullable"
     }
 ```
@@ -205,12 +206,13 @@ AuditLog là nhật ký bảo mật dạng append-only, phục vụ điều tra 
 |---|---|---:|---|
 | `Id` | `bigint IDENTITY` | Không | Primary key tăng dần. |
 | `EventType` | `varchar(64)` | Không | Mã sự kiện từ allowlist. |
-| `OccurredAt` | `datetimeoffset(7)` | Không | Thời điểm UTC phía server. |
+| `CreatedAt` | `datetimeoffset(7)` | Không | Thời điểm UTC phía server. |
 | `UserId` | `uniqueidentifier` | Có | User liên quan; null nếu login bằng email không tồn tại. |
 | `OtpChallengeId` | `uniqueidentifier` | Có | ID tham chiếu thông tin bất biến; không tạo physical FK để purge challenge không sửa audit. |
-| `Outcome` | `varchar(16)` | Không | `SUCCESS`, `FAILURE` hoặc `DENIED`. |
+| `Success` | `bit` | Không | Kết quả thành công/thất bại của event. |
 | `ReasonCode` | `varchar(64)` | Có | Mã lý do nội bộ từ allowlist; không chứa input/exception tự do. |
 | `IpAddress` | `varchar(45)` | Có | IPv4/IPv6 sau xử lý trusted proxy; là dữ liệu cá nhân. |
+| `UserAgent` | `nvarchar(256)` | Có | User-Agent được giới hạn độ dài; phải sanitize trước khi ghi/hiển thị. |
 | `CorrelationId` | `varchar(64)` | Có | ID do server tạo/validate nghiêm ngặt để liên kết với application log đã sanitize. |
 
 Không thêm cột `Details`, `Message` hoặc JSON tự do ở thiết kế ban đầu vì chúng dễ trở thành đường rò rỉ dữ liệu bí mật. Nếu phase sau thực sự cần metadata, phải dùng allowlist key/value và security review riêng.
@@ -220,24 +222,23 @@ Không thêm cột `Details`, `Message` hoặc JSON tự do ở thiết kế ban
 - `PK_AuditLogs` trên `Id`.
 - `FK_AuditLogs_Users_UserId` nullable, delete behavior `NO ACTION` vì không hard-delete User trong phạm vi.
 - `OtpChallengeId` là logical/informational reference, không có physical FK. Nhờ vậy việc purge challenge không update hoặc xóa AuditLog append-only.
-- Check constraint `Outcome IN ('SUCCESS', 'FAILURE', 'DENIED')`.
-- Index `IX_AuditLogs_OccurredAt` trên `OccurredAt DESC`.
-- Index `IX_AuditLogs_UserId_OccurredAt` trên `(UserId, OccurredAt DESC)`.
-- Index `IX_AuditLogs_EventType_OccurredAt` trên `(EventType, OccurredAt DESC)`.
+- Index `IX_AuditLogs_CreatedAt` trên `CreatedAt DESC`.
+- Index `IX_AuditLogs_UserId_CreatedAt` trên `(UserId, CreatedAt DESC)`.
+- Index `IX_AuditLogs_EventType_CreatedAt` trên `(EventType, CreatedAt DESC)`.
 - Có thể thêm index theo `OtpChallengeId` nếu truy vấn điều tra cần; tránh index quá mức trong bài demo.
 
 ### 5.4. Event bắt buộc
 
-| EventType | Outcome thường dùng | Khi ghi |
+| EventType | Success thường dùng | Khi ghi |
 |---|---|---|
-| `REGISTER_SUCCESS` | `SUCCESS` | User được tạo thành công. |
-| `LOGIN_PASSWORD_SUCCESS` | `SUCCESS` | Email/password đúng, trước bước OTP. |
-| `LOGIN_PASSWORD_FAILED` | `FAILURE` | Email/password sai hoặc tài khoản inactive; response client vẫn giống nhau. |
-| `OTP_CREATED` | `SUCCESS` | Challenge mới đã được lưu; không ghi OTP. |
-| `OTP_VERIFY_FAILED` | `FAILURE` | OTP không khớp hoặc challenge bị replay/revoke/lock/not found; expired dùng event riêng. |
-| `OTP_EXPIRED` | `DENIED` | Verify challenge tại/sau `ExpiresAt`. |
-| `OTP_VERIFY_SUCCESS` | `SUCCESS` | `ConsumedAt` được commit thành công. |
-| `OTP_RESEND` | `SUCCESS` | Challenge cũ được revoke và challenge mới được tạo. |
+| `REGISTER_SUCCESS` | `true` | User được tạo thành công. |
+| `LOGIN_PASSWORD_SUCCESS` | `true` | Email/password đúng, trước bước OTP. |
+| `LOGIN_PASSWORD_FAILED` | `false` | Email/password sai hoặc tài khoản inactive; response client vẫn giống nhau. |
+| `OTP_CREATED` | `true` | Challenge mới đã được lưu; không ghi OTP. |
+| `OTP_VERIFY_FAILED` | `false` | OTP không khớp hoặc challenge bị replay/revoke/lock/not found; expired dùng event riêng. |
+| `OTP_EXPIRED` | `false` | Verify challenge tại/sau `ExpiresAt`. |
+| `OTP_VERIFY_SUCCESS` | `true` | `ConsumedAt` được commit thành công. |
+| `OTP_RESEND` | `true` | Challenge cũ được revoke và challenge mới được tạo. |
 
 Policy bổ sung đã chốt: lần sai thứ 5 ghi thêm `OTP_MAX_ATTEMPTS`; SMTP failure ghi `OTP_DELIVERY_FAILED`; JWT được cấp ghi `AUTHENTICATION_SUCCESS`. `OTP_EXPIRED` được ghi một lần cho lần verify expired và không ghi thêm `OTP_VERIFY_FAILED` cho cùng request. `OTP_REVOKED`/`RATE_LIMITED` có thể được ghi theo policy chống log flood. Event/reason code phải là hằng số nội bộ, không lấy trực tiếp từ dữ liệu client.
 

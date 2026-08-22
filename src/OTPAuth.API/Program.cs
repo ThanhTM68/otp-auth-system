@@ -1,4 +1,6 @@
 using Microsoft.OpenApi.Models;
+using Microsoft.EntityFrameworkCore;
+using OTPAuth.API.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +15,11 @@ builder.Services.AddSwaggerGen(options =>
         Version = "v1"
     });
 });
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
+
+builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(connectionString));
 
 var app = builder.Build();
 
