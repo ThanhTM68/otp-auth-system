@@ -47,12 +47,12 @@
 
 ## PHASE 3 - Registration
 
-- [ ] RegisterRequest
-- [ ] Validation
-- [ ] Password hashing
-- [ ] Check duplicate email
-- [ ] Register API
-- [ ] Unit Test
+- [x] RegisterRequest
+- [x] Validation
+- [x] Password hashing
+- [x] Check duplicate email
+- [x] Register API
+- [x] Unit Test
 
 ---
 
