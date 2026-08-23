@@ -6,7 +6,7 @@ Tài liệu này đặc tả yêu cầu nghiệp vụ và bảo mật cho hệ t
 
 `Email + Password -> OTP qua Email -> JWT`
 
-Phạm vi hiện tại chỉ là phân tích và thiết kế. Phase 0 không tạo solution, project ASP.NET Core, source code, migration hay database thật.
+Tài liệu được khởi tạo ở Phase 0 và tiếp tục là nguồn yêu cầu của hệ thống. Implementation hiện đã hoàn thành backend, security tests và UI demo đến hết Phase 12.
 
 ### Trong phạm vi
 
@@ -263,6 +263,8 @@ Hiện thực Phase 9 dùng middleware chính thức `Microsoft.AspNetCore.RateL
 - Không response/log/audit/database nào chứa OTP plaintext hoặc password.
 - JWT thiếu/sai signature, issuer, audience hoặc đã hết hạn không truy cập được API protected.
 - Không JWT nào được cấp trước khi OTP consume commit.
+- UI demo cùng origin phải có Register, Login, OTP, Resend, Dashboard và Logout; chỉ chuyển Dashboard sau khi verify OTP nhận JWT.
+- UI không lưu password/OTP trong Web Storage, giữ challenge ID trong memory và chỉ giữ JWT tạm trong `sessionStorage`.
 
 ## 13. Quyết định thiết kế quan trọng
 

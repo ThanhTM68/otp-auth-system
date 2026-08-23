@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'">
+    <meta name="referrer" content="no-referrer">
+    <title>OTP Authentication Demo</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="/" aria-label="OTP Authentication Demo">
+            <span class="brand-mark" aria-hidden="true">✓</span>
+            <span>
+                <strong>OTP Auth</strong>
+                <small>Security demo</small>
+            </span>
+        </a>
+        <a class="swagger-link" href="/swagger" target="_blank" rel="noreferrer">Swagger API</a>
+    </header>
+
+    <main class="page-shell">
+        <section class="intro" aria-labelledby="intro-title">
+            <p class="eyebrow">Email · Password · OTP · JWT</p>
+            <h1 id="intro-title">Xác thực hai bước, trình bày trong một luồng rõ ràng.</h1>
+            <p class="intro-copy">
+                Mật khẩu đúng chỉ mở bước OTP. JWT chỉ được cấp sau khi mã dùng một lần
+                được máy chủ xác minh thành công.
+            </p>
+
+            <ol class="flow" aria-label="Luồng xác thực">
+                <li data-flow-step="credentials">
+                    <span>1</span>
+                    <div><strong>Mật khẩu</strong><small>Xác minh tài khoản</small></div>
+                </li>
+                <li data-flow-step="otp">
+                    <span>2</span>
+                    <div><strong>OTP Email</strong><small>Mã 6 chữ số</small></div>
+                </li>
+                <li data-flow-step="jwt">
+                    <span>3</span>
+                    <div><strong>JWT</strong><small>Truy cập API bảo vệ</small></div>
+                </li>
+            </ol>
+
+            <div class="security-note">
+                <span aria-hidden="true">🔒</span>
+                <p>Password và OTP không được lưu trong trình duyệt. JWT demo chỉ tồn tại trong phiên tab hiện tại.</p>
+            </div>
+        </section>
+
+        <section class="auth-card" aria-live="polite">
+            <div id="alert" class="alert" role="status" hidden></div>
+
+            <section class="view" data-view="login">
+                <div class="view-heading">
+                    <p class="step-label">Bước 1 / 3</p>
+                    <h2>Đăng nhập</h2>
+                    <p>Nhập thông tin tài khoản để nhận mã OTP qua email.</p>
+                </div>
+
+                <form id="login-form">
+                    <label for="login-email">Email</label>
+                    <input id="login-email" name="email" type="email" maxlength="254"
+                           autocomplete="email" placeholder="student@example.com" required>
+
+                    <label for="login-password">Mật khẩu</label>
+                    <input id="login-password" name="password" type="password" minlength="8"
+                           maxlength="128" autocomplete="current-password" required>
+
+                    <button class="primary-button" type="submit" data-idle-text="Đăng nhập"
+                            data-loading-text="Đang đăng nhập…">Đăng nhập</button>
+                </form>
+
+                <p class="switch-copy">Chưa có tài khoản?
+                    <button class="text-button" type="button" data-go="register">Đăng ký ngay</button>
+                </p>
+            </section>
+
+            <section class="view" data-view="register" hidden>
+                <div class="view-heading">
+                    <p class="step-label">Tạo tài khoản</p>
+                    <h2>Đăng ký</h2>
+                    <p>Thông tin hợp lệ sẽ được kiểm tra lại hoàn toàn ở máy chủ.</p>
+                </div>
+
+                <form id="register-form">
+                    <label for="register-name">Họ và tên</label>
+                    <input id="register-name" name="fullName" type="text" minlength="2"
+                           maxlength="100" autocomplete="name" required>
+
+                    <label for="register-email">Email</label>
+                    <input id="register-email" name="email" type="email" maxlength="254"
+                           autocomplete="email" placeholder="student@example.com" required>
+
+                    <label for="register-password">Mật khẩu</label>
+                    <input id="register-password" name="password" type="password" minlength="8"
+                           maxlength="128" autocomplete="new-password" required>
+
+                    <label for="register-confirm-password">Xác nhận mật khẩu</label>
+                    <input id="register-confirm-password" name="confirmPassword" type="password"
+                           minlength="8" maxlength="128" autocomplete="new-password" required>
+
+                    <button class="primary-button" type="submit" data-idle-text="Đăng ký"
+                            data-loading-text="Đang đăng ký…">Đăng ký</button>
+                </form>
+
+                <p class="switch-copy">Đã có tài khoản?
+                    <button class="text-button" type="button" data-go="login">Đăng nhập</button>
+                </p>
+            </section>
+
+            <section class="view" data-view="otp" hidden>
+                <div class="view-heading">
+                    <p class="step-label">Bước 2 / 3</p>
+                    <h2>Xác minh OTP</h2>
+                    <p>Mã gồm 6 chữ số đã được gửi tới email của bạn.</p>
+                </div>
+
+                <div class="timer-panel">
+                    <div>
+                        <span>Mã còn hiệu lực</span>
+                        <strong id="otp-countdown">03:00</strong>
+                    </div>
+                    <div>
+                        <span>Gửi lại sau</span>
+                        <strong id="resend-countdown">60 giây</strong>
+                    </div>
+                </div>
+
+                <form id="otp-form">
+                    <label for="otp-input">Mã OTP</label>
+                    <input id="otp-input" class="otp-input" name="otp" type="text"
+                           inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                           pattern="[0-9]{6}" placeholder="000000" required>
+
+                    <button class="primary-button" type="submit" data-idle-text="Xác minh OTP"
+                            data-loading-text="Đang xác minh…">Xác minh OTP</button>
+                </form>
+
+                <div class="otp-actions">
+                    <button id="resend-button" class="secondary-button" type="button"
+                            data-idle-text="Gửi lại OTP" data-loading-text="Đang gửi lại…">
+                        Gửi lại OTP
+                    </button>
+                    <button class="text-button" type="button" data-cancel-otp>Đăng nhập lại</button>
+                </div>
+            </section>
+
+            <section class="view" data-view="dashboard" hidden>
+                <div class="success-icon" aria-hidden="true">✓</div>
+                <div class="view-heading centered">
+                    <p class="step-label">Bước 3 / 3</p>
+                    <h2>Đăng nhập thành công</h2>
+                    <p>JWT hợp lệ đã mở quyền truy cập API bảo vệ.</p>
+                </div>
+
+                <dl class="profile-card">
+                    <div><dt>Họ và tên</dt><dd id="profile-name">—</dd></div>
+                    <div><dt>Email</dt><dd id="profile-email">—</dd></div>
+                    <div><dt>Trạng thái</dt><dd><span class="status-pill">Đã xác thực</span></dd></div>
+                </dl>
+
+                <button id="check-profile-button" class="secondary-button" type="button"
+                        data-idle-text="Kiểm tra API bảo vệ"
+                        data-loading-text="Đang kiểm tra…">Kiểm tra API bảo vệ</button>
+                <button id="logout-button" class="danger-button" type="button">Đăng xuất</button>
+            </section>
+        </section>
+    </main>
+
+    <footer>
+        <span>ASP.NET Core Web API</span>
+        <span aria-hidden="true">·</span>
+        <span>SQL Server</span>
+        <span aria-hidden="true">·</span>
+        <span>JWT Authentication</span>
+    </footer>
+
+    <script src="/app.js" defer></script>
+</body>
+</html>

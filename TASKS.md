@@ -150,12 +150,12 @@
 
 ## PHASE 12 - UI Demo
 
-- [ ] Register Page
-- [ ] Login Page
-- [ ] OTP Page
-- [ ] Dashboard
-- [ ] Resend timer
-- [ ] Error messages
+- [x] Register Page
+- [x] Login Page
+- [x] OTP Page
+- [x] Dashboard
+- [x] Resend timer
+- [x] Error messages
 
 ---
 

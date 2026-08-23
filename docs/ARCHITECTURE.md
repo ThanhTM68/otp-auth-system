@@ -345,6 +345,8 @@ Các key JWT và OTP phải khác nhau. Local development dùng .NET User Secret
 ## 12. Quyết định và giới hạn kiến trúc
 
 - Chọn một deployable monolith và một SQL Server; rate limiter in-memory phù hợp bản demo một instance.
+- Phase 12 phục vụ HTML/CSS/JavaScript tĩnh từ `wwwroot` trong cùng ASP.NET Core app. UI gọi API bằng relative URL nên không cần mở CORS.
+- Challenge ID chỉ giữ trong bộ nhớ JavaScript của trang; JWT demo giữ trong `sessionStorage` và bị xóa khi logout. Password và OTP không được ghi vào Web Storage hoặc console.
 - AuthService dùng trực tiếp DbContext; không thêm Repository, CQRS hoặc event bus.
 - Chọn transaction ngắn + `RowVersion` + filtered unique index để bảo vệ OTP state.
 - Chọn HMAC keyed hash cho OTP thay vì raw hash do entropy OTP thấp.

@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi
 
-Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. `POST /api/auth/verify-otp`, JWT, `GET /api/auth/me`, `POST /api/auth/resend-otp`, rate limit HTTP theo IP và audit logging đã được hiện thực đến Phase 10. Quota theo User/email trong các phần thiết kế bên dưới là contract mục tiêu, không phải xác nhận đã được hiện thực.
+Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. Backend đến Phase 10, security tests Phase 11 và UI demo cùng origin Phase 12 đã được hiện thực. Quota theo User/email trong các phần thiết kế bên dưới là contract mục tiêu, không phải xác nhận đã được hiện thực.
 
 Các endpoint:
 
@@ -381,7 +381,7 @@ Response `401` có `WWW-Authenticate: Bearer` nhưng không mô tả chi tiết 
 
 - Access token TTL mặc định 15 phút, không có refresh token.
 - Signing key HS256 ngẫu nhiên tối thiểu 256 bit, tách khỏi OTP HMAC key và không hard-code/commit.
-- Client lưu token theo cách giảm rủi ro XSS phù hợp với frontend được chọn ở phase sau; không đưa token vào URL.
+- UI demo Phase 12 lưu access token trong `sessionStorage` để giới hạn theo phiên tab; không đưa token vào URL, DOM hiển thị hoặc console.
 - Logout của demo chỉ xóa token phía client. Token bị đánh cắp hoặc bản sao token vẫn hợp lệ đến `exp`.
 - Nếu cần revoke tức thời khi logout/disable User, phải bổ sung token denylist/security stamp trong yêu cầu tương lai; không tự mở rộng Phase 0.
 
@@ -459,6 +459,6 @@ Audit không chứa email/password request thô, password hash, OTP, OTP hash, J
 - Tạo OpenAPI thực tế và kiểm tra response schema ở Phase triển khai phù hợp.
 - Chốt issuer/audience theo môi trường và tạo key thật; giá trị không được đưa vào tài liệu/repository.
 - Đo/tinh chỉnh rate limit và quota phát email với SMTP provider thật.
-- Chọn client token storage khi thực hiện frontend và đánh giá XSS/CSRF tương ứng.
+- Tiếp tục đánh giá XSS/CSP và chiến lược token storage nếu UI được nâng từ demo lên triển khai thực tế.
 - Nếu yêu cầu UX cần phân biệt OTP expired với mã sai, phải security review trước khi thay lỗi chung.
 - API/version tương lai cho refresh, revoke token, đổi password/email hoặc quản trị User nằm ngoài phạm vi hiện tại.
