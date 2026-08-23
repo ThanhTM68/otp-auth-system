@@ -42,4 +42,31 @@ public class AuthController(IAuthService authService) : ControllerBase
             Title = title,
             Extensions = { ["code"] = code }
         };
+
+    [HttpPost("login")]
+    [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public async Task<ActionResult<LoginResponse>> Login(
+        LoginRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await authService.LoginAsync(request, cancellationToken);
+
+        return result.Status switch
+        {
+            LoginStatus.Success => Ok(result.Response),
+            LoginStatus.InvalidCredentials => Unauthorized(CreateProblem(
+                StatusCodes.Status401Unauthorized,
+                "Thông tin đăng nhập không hợp lệ.",
+                "INVALID_CREDENTIALS")),
+            _ => StatusCode(
+                StatusCodes.Status500InternalServerError,
+                CreateProblem(
+                    StatusCodes.Status500InternalServerError,
+                    "Không thể hoàn tất đăng nhập. Vui lòng thử lại sau.",
+                    "INTERNAL_ERROR"))
+        };
+    }
 }

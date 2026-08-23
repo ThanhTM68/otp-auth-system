@@ -2,10 +2,9 @@ using System.ComponentModel.DataAnnotations;
 
 namespace OTPAuth.API.DTOs;
 
-public class RegisterRequest
+public class LoginRequest
 {
     private string? _email;
-    private string? _fullName;
 
     [Required]
     [EmailAddress]
@@ -20,12 +19,4 @@ public class RegisterRequest
     [NotWhiteSpace]
     [StringLength(128, MinimumLength = 8)]
     public string? Password { get; set; }
-
-    [Required]
-    [StringLength(100, MinimumLength = 2)]
-    public string? FullName
-    {
-        get => _fullName;
-        set => _fullName = value?.Trim();
-    }
 }

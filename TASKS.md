@@ -58,25 +58,25 @@
 
 ## PHASE 4 - Password Login
 
-- [ ] LoginRequest
-- [ ] Verify email
-- [ ] Verify password
-- [ ] Không cấp JWT ở bước này
-- [ ] Create OTP challenge
-- [ ] Unit Test
+- [x] LoginRequest
+- [x] Verify email
+- [x] Verify password
+- [x] Không cấp JWT ở bước này
+- [x] Create OTP challenge
+- [x] Unit Test
 
 ---
 
 ## PHASE 5 - OTP Core
 
-- [ ] Secure OTP generator
-- [ ] OTP hashing
-- [ ] OTP expiration
-- [ ] AttemptCount
-- [ ] MaxAttempts
-- [ ] ConsumedAt
-- [ ] IsRevoked
-- [ ] Unit Test
+- [x] Secure OTP generator
+- [x] OTP hashing
+- [x] OTP expiration
+- [x] AttemptCount
+- [x] MaxAttempts
+- [x] ConsumedAt
+- [x] IsRevoked
+- [x] Unit Test
 
 ---
 

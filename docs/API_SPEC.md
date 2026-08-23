@@ -157,6 +157,7 @@ Content-Type: application/json
 
 ```json
 {
+  "requiresOtp": true,
   "challengeId": "b3bb189f-8bf9-4a52-a8c8-fcba5db4f88f",
   "purpose": "LOGIN",
   "expiresAt": "2026-08-22T13:03:00Z",

@@ -2,6 +2,8 @@ using Microsoft.OpenApi.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using OTPAuth.API.Configuration;
 using OTPAuth.API.Data;
 using OTPAuth.API.Entities;
 using OTPAuth.API.Services;
@@ -40,6 +42,26 @@ builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(conn
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddOptions<OtpOptions>()
+    .BindConfiguration(OtpOptions.SectionName)
+    .Validate(options =>
+        options.Length == 6 &&
+        options.TtlMinutes == 3 &&
+        options.FlowTtlMinutes == 10 &&
+        options.MaxAttempts is >= 1 and <= 5,
+        "OTP options must use 6 digits, 3-minute TTL, 10-minute flow TTL, and 1-5 attempts.")
+    .ValidateOnStart();
+
+var encodedOtpHashingKey = builder.Configuration["Otp:HashingKey"]
+    ?? throw new InvalidOperationException("Otp:HashingKey is required.");
+var otpHashingKey = Convert.FromBase64String(encodedOtpHashingKey);
+if (otpHashingKey.Length < 32)
+{
+    throw new InvalidOperationException("Otp:HashingKey must contain at least 256 bits.");
+}
+
+builder.Services.AddSingleton<IOtpService>(serviceProvider =>
+    new OtpService(serviceProvider.GetRequiredService<IOptions<OtpOptions>>(), otpHashingKey));
 
 var app = builder.Build();
 

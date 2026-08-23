@@ -1,7 +1,9 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using OTPAuth.API.Data;
+using OTPAuth.API.Configuration;
 using OTPAuth.API.DTOs;
 using OTPAuth.API.Entities;
 using OTPAuth.API.Services;
@@ -91,5 +93,8 @@ public class RegistrationTests
     }
 
     private static AuthService CreateService(AppDbContext context) =>
-        new(context, new PasswordHasher<User>(), TimeProvider.System);
+        new(context, new PasswordHasher<User>(), TimeProvider.System, CreateOtpService());
+
+    private static OtpService CreateOtpService() =>
+        new(Options.Create(new OtpOptions()), Enumerable.Range(0, 32).Select(index => (byte)index).ToArray());
 }

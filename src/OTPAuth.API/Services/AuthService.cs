@@ -10,6 +10,7 @@ namespace OTPAuth.API.Services;
 public interface IAuthService
 {
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
+    Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
 }
 
 public enum RegistrationStatus
@@ -21,15 +22,29 @@ public enum RegistrationStatus
 
 public sealed record RegistrationResult(RegistrationStatus Status, RegisterResponse? Response = null);
 
+public enum LoginStatus
+{
+    Success,
+    InvalidCredentials,
+    PersistenceFailure
+}
+
+public sealed record LoginResult(LoginStatus Status, LoginResponse? Response = null);
+
 public class AuthService(
     AppDbContext dbContext,
     IPasswordHasher<User> passwordHasher,
-    TimeProvider timeProvider) : IAuthService
+    TimeProvider timeProvider,
+    IOtpService otpService) : IAuthService
 {
+    private readonly string dummyPasswordHash = passwordHasher.HashPassword(
+        new User(),
+        "not-a-user-password-and-not-a-secret");
+
     public async Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
         var email = request.Email!;
-        var normalizedEmail = email.ToUpperInvariant();
+        var normalizedEmail = EmailNormalizer.Normalize(email);
 
         if (await dbContext.Users.AnyAsync(user => user.NormalizedEmail == normalizedEmail, cancellationToken))
         {
@@ -73,6 +88,58 @@ public class AuthService(
         return new RegistrationResult(
             RegistrationStatus.Success,
             new RegisterResponse(user.Id, user.Email, user.FullName, user.IsActive, user.CreatedAt));
+    }
+
+    public async Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
+    {
+        var normalizedEmail = EmailNormalizer.Normalize(request.Email!);
+        var user = await dbContext.Users.SingleOrDefaultAsync(
+            candidate => candidate.NormalizedEmail == normalizedEmail,
+            cancellationToken);
+
+        var passwordVerification = passwordHasher.VerifyHashedPassword(
+            user ?? new User(),
+            user?.PasswordHash ?? dummyPasswordHash,
+            request.Password!);
+
+        if (user is null || !user.IsActive || passwordVerification == PasswordVerificationResult.Failed)
+        {
+            return new LoginResult(LoginStatus.InvalidCredentials);
+        }
+
+        var openChallenges = await dbContext.OtpChallenges
+            .Where(challenge => challenge.UserId == user.Id &&
+                challenge.Purpose == "LOGIN" &&
+                !challenge.IsRevoked &&
+                challenge.ConsumedAt == null)
+            .ToListAsync(cancellationToken);
+
+        foreach (var openChallenge in openChallenges)
+        {
+            otpService.RevokeChallenge(openChallenge);
+        }
+
+        var challenge = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
+        dbContext.OtpChallenges.Add(challenge);
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            return new LoginResult(LoginStatus.PersistenceFailure);
+        }
+
+        return new LoginResult(
+            LoginStatus.Success,
+            new LoginResponse(
+                RequiresOtp: true,
+                ChallengeId: challenge.Id,
+                Purpose: challenge.Purpose,
+                ExpiresAt: challenge.ExpiresAt,
+                FlowExpiresAt: challenge.FlowExpiresAt,
+                ResendAvailableAt: challenge.CreatedAt.AddMinutes(1)));
     }
 
     private static bool IsUniqueEmailViolation(DbUpdateException exception) =>

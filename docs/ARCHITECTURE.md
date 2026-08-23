@@ -20,7 +20,7 @@ flowchart LR
     ProtectedController --> AuthService
 
     AuthService --> PasswordHasher[PasswordHasher]
-    AuthService --> OtpProtector[OTP Generator / Protector]
+    AuthService --> OtpService[IOtpService / OtpService]
     AuthService --> JwtService[JWT Token Service]
     AuthService --> EmailService[Email Service]
     AuthService --> DbContext[EF Core DbContext]
@@ -28,7 +28,7 @@ flowchart LR
     DbContext -->|Parameterized SQL| SqlServer[(SQL Server)]
     EmailService -->|SMTP over TLS| Smtp[SMTP Provider]
     PasswordHasher -.-> Config[Configuration / Secrets]
-    OtpProtector -.-> Config
+    OtpService -.-> Config
     JwtService -.-> Config
     EmailService -.-> Config
     DbContext -.-> Config
@@ -79,14 +79,13 @@ Các service chuyên trách chỉ tách những chức năng có ý nghĩa bảo
 - Hỗ trợ rehash khi framework báo hash cũ cần nâng cấp ở lần đăng nhập thành công trong phase triển khai phù hợp.
 - Có dummy hash cố định từ configuration/application startup để giảm timing enumeration khi email không tồn tại; dummy hash không phải credential thật và không được log.
 
-### 3.5. OTP Generator / Protector
+### 3.5. `IOtpService` / `OtpService`
 
-- Sinh số bằng CSPRNG trong miền `000000` đến `999999`.
-- Format OTP thành chuỗi 6 chữ số để giữ số `0` đầu.
-- Tạo HMAC-SHA-256 với `OtpHashingKey` ngẫu nhiên riêng tối thiểu 256 bit và context chuẩn hóa gồm `AuthenticationFlowId`, `ChallengeId`, `UserId`, `Purpose` và OTP.
-- So sánh HMAC bằng fixed-time comparison.
-- Không lưu hoặc log OTP plaintext. OTP chỉ sống tạm trong memory cho đến khi được chuyển cho Email Service.
-- Dùng `TimeProvider`/clock được inject để test TTL và cooldown ổn định.
+- Cung cấp core OTP tái sử dụng: sinh CSPRNG, format 6 chữ số, tạo/so sánh HMAC-SHA-256 fixed-time và tạo `LOGIN` challenge.
+- Tập trung lifecycle `IsExpired`, `IsUsable`, increment attempt, revoke và state single-use; việc persist atomic/concurrency sẽ được thêm ở Phase 7.
+- Nhận `OtpOptions` cho độ dài, TTL, flow TTL và giới hạn attempts; bản demo validate cố định 6 chữ số, 3 phút, 10 phút và tối đa 5 attempts.
+- Nhận `Otp:HashingKey` tối thiểu 256 bit từ User Secrets/environment, không từ source code; payload HMAC có encoding có độ dài rõ ràng cho `AuthenticationFlowId`, `ChallengeId`, `UserId`, `Purpose` và OTP.
+- Không lưu hoặc log OTP plaintext. OTP chỉ sống tạm trong stack/memory để tạo HMAC; Phase 6 mới chuyển mã tạm thời tới Email Service.
 
 ### 3.6. JwtTokenService
 
@@ -171,7 +170,7 @@ sequenceDiagram
     actor C as Client
     participant AC as AuthController
     participant AS as AuthService
-    participant OP as OTP Protector
+    participant OS as OtpService
     participant DB as EF Core / SQL Server
     participant ES as Email Service
 
@@ -191,8 +190,8 @@ sequenceDiagram
             AS-->>AC: Rate-limited result
             AC-->>C: 429; no challenge
         else Còn quota
-            AS->>OP: Generate OTP + HMAC
-            OP-->>AS: OTP transient + OtpHash
+            AS->>OS: Generate OTP + HMAC
+            OS-->>AS: OTP transient + OtpHash
             AS->>DB: Transaction: revoke old + insert challenge + OTP_CREATED
             DB-->>AS: Commit
             AS->>ES: Send OTP to User.Email
@@ -217,7 +216,7 @@ sequenceDiagram
     actor C as Client
     participant AC as AuthController
     participant AS as AuthService
-    participant OP as OTP Protector
+    participant OS as OtpService
     participant DB as EF Core / SQL Server
     participant JS as JWT Token Service
 
@@ -225,7 +224,7 @@ sequenceDiagram
     AC->>AS: Validated DTO
     AS->>DB: Load active LOGIN challenge + User
     AS->>AS: Check revoked/consumed/attempt/expiry/user active
-    AS->>OP: Fixed-time HMAC verification
+    AS->>OS: Fixed-time HMAC verification
     alt OTP sai
         AS->>DB: Atomic increment; revoke at 5; audit failure
         AS-->>AC: Verification failed result
@@ -249,7 +248,7 @@ sequenceDiagram
     actor C as Client
     participant AC as AuthController
     participant AS as AuthService
-    participant OP as OTP Protector
+    participant OS as OtpService
     participant DB as EF Core / SQL Server
     participant ES as Email Service
 
@@ -257,7 +256,7 @@ sequenceDiagram
     AC->>AS: Validated DTO
     AS->>DB: Load requested open challenge + User
     AS->>AS: Check state, flow expiry, resend count, cooldown and quotas
-    AS->>OP: Generate completely new OTP + HMAC
+    AS->>OS: Generate completely new OTP + HMAC
     AS->>DB: Transaction: revoke old + insert new + audits
     DB-->>AS: Commit
     AS->>ES: Send new OTP to User.Email
