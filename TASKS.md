@@ -93,16 +93,16 @@
 
 ## PHASE 7 - OTP Verification
 
-- [ ] Verify OTP API
-- [ ] Check Challenge
-- [ ] Check expiration
-- [ ] Check attempts
-- [ ] Check consumed
-- [ ] Check revoked
-- [ ] Verify OTP hash
-- [ ] Consume OTP
-- [ ] Generate JWT
-- [ ] Unit Test
+- [x] Verify OTP API
+- [x] Check Challenge
+- [x] Check expiration
+- [x] Check attempts
+- [x] Check consumed
+- [x] Check revoked
+- [x] Verify OTP hash
+- [x] Consume OTP
+- [x] Generate JWT
+- [x] Unit Test
 
 ---
 

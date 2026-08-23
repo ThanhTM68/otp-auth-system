@@ -121,7 +121,7 @@ public class EmailDeliveryTests
         AppDbContext context,
         OtpService otpService,
         IEmailService emailService) =>
-        new(context, new PasswordHasher<User>(), TimeProvider.System, otpService, emailService);
+        new(context, new PasswordHasher<User>(), TimeProvider.System, otpService, emailService, new FakeJwtTokenService());
 
     private static OtpService CreateOtpService() =>
         new(Options.Create(new OtpOptions()), Enumerable.Range(0, 32).Select(index => (byte)index).ToArray());

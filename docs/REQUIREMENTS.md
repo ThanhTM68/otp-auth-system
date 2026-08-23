@@ -143,6 +143,8 @@ Hiện thực Phase 6 persist `OtpHash` trước, sau đó chuyển OTP plaintex
 
 Client nhận thông báo chung cho OTP/challenge sai, hết hạn, đã dùng, đã revoke hoặc bị khóa. Lý do chi tiết chỉ xuất hiện dưới dạng reason code đã sanitize trong audit log.
 
+Hiện thực Phase 7 dùng DTO allowlist (`challengeId`, `otp` đúng 6 chữ số), HMAC fixed-time, UTC server time và `RowVersion` của EF Core. Khi OTP sai, thay đổi `AttemptCount` (và revoke ở lần sai thứ 5) phải persist thành công trước khi trả lỗi; khi OTP đúng, `ConsumedAt` phải persist thành công trước khi JWT được tạo. Một conflict concurrency sẽ reload state và thử lại tối đa 3 lần, sau đó fail closed với phản hồi verify chung. Audit chi tiết và endpoint rate limiting vẫn chưa được hiện thực trong phase này.
+
 ### 7.5. Resend OTP Flow
 
 1. Client gửi `challengeId`; không gửi email hoặc UserId làm căn cứ xác định người nhận. Middleware áp dụng quota thô theo IP.

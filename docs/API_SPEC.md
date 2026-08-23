@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi
 
-Tài liệu định nghĩa contract đề xuất cho ASP.NET Core Web API của hệ thống xác thực OTP. Đây là thiết kế Phase 0, chưa có endpoint hoặc source code được tạo.
+Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. `POST /api/auth/verify-otp`, JWT và `GET /api/auth/me` đã được hiện thực ở Phase 7. Resend, rate limiting và audit đầy đủ vẫn thuộc các Phase 8, 9 và 10; các quy tắc tương ứng bên dưới là contract mục tiêu, không phải xác nhận chúng đã được hiện thực.
 
 Các endpoint:
 

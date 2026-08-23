@@ -287,7 +287,7 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 - Thêm filtered unique index trên `(UserId, Purpose)` khi `IsRevoked = 0 AND ConsumedAt IS NULL`.
 - Dùng transaction ngắn với isolation `Serializable` cho revoke/create challenge; xử lý unique/concurrency exception theo hướng fail closed.
 - Verify đúng dùng conditional update/concurrency check; commit `ConsumedAt` trước khi cấp JWT.
-- Verify đúng/sai dùng `RowVersion` optimistic concurrency trong transaction ngắn. Khi conflict, service rollback, reload và đánh giá lại toàn bộ state với cùng request; tiếp tục cho tới khi update commit, challenge đã terminal hoặc request bị hủy. Vì vậy không có lost update và challenge khóa sau 5 lần sai đã commit.
+- Verify đúng/sai dùng `RowVersion` optimistic concurrency trong transaction ngắn. Khi conflict, service xóa tracked state, reload và đánh giá lại toàn bộ state với cùng request, tối đa 3 lần; nếu vẫn conflict thì fail closed với lỗi verify chung. Vì vậy JWT chỉ được tạo bởi request đã commit `ConsumedAt`, không có lost update trong các update đã commit và challenge khóa sau 5 lần sai đã commit.
 - Lấy một giá trị `now` UTC từ `TimeProvider` cho toàn bộ quyết định trong một operation; `now >= ExpiresAt` nghĩa là hết hạn.
 
 ### Các race condition bắt buộc test

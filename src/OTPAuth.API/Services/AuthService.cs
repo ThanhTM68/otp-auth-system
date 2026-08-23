@@ -11,6 +11,8 @@ public interface IAuthService
 {
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
     Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
+    Task<VerifyOtpResult> VerifyOtpAsync(VerifyOtpRequest request, CancellationToken cancellationToken = default);
+    Task<CurrentUserResponse?> GetActiveUserAsync(Guid userId, CancellationToken cancellationToken = default);
 }
 
 public enum RegistrationStatus
@@ -32,12 +34,22 @@ public enum LoginStatus
 
 public sealed record LoginResult(LoginStatus Status, LoginResponse? Response = null);
 
+public enum VerifyOtpStatus
+{
+    Success,
+    VerificationFailed,
+    PersistenceFailure
+}
+
+public sealed record VerifyOtpResult(VerifyOtpStatus Status, VerifyOtpResponse? Response = null);
+
 public class AuthService(
     AppDbContext dbContext,
     IPasswordHasher<User> passwordHasher,
     TimeProvider timeProvider,
     IOtpService otpService,
-    IEmailService emailService) : IAuthService
+    IEmailService emailService,
+    IJwtTokenService jwtTokenService) : IAuthService
 {
     private readonly string dummyPasswordHash = passwordHasher.HashPassword(
         new User(),
@@ -165,6 +177,81 @@ public class AuthService(
                 ExpiresAt: challenge.ExpiresAt,
                 FlowExpiresAt: challenge.FlowExpiresAt,
                 ResendAvailableAt: challenge.CreatedAt.AddMinutes(1)));
+    }
+
+    public async Task<VerifyOtpResult> VerifyOtpAsync(
+        VerifyOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var now = timeProvider.GetUtcNow();
+        const int maxConcurrencyRetries = 3;
+
+        for (var attempt = 0; attempt < maxConcurrencyRetries; attempt++)
+        {
+            var challenge = await dbContext.OtpChallenges
+                .Include(candidate => candidate.User)
+                .SingleOrDefaultAsync(candidate => candidate.Id == request.ChallengeId, cancellationToken);
+
+            if (challenge is null || challenge.User is null || !challenge.User.IsActive ||
+                challenge.Purpose != "LOGIN" || !otpService.IsUsable(challenge, now))
+            {
+                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+            }
+
+            if (!otpService.VerifyOtp(challenge, request.Otp!))
+            {
+                otpService.TryRecordFailedAttempt(challenge, now);
+
+                try
+                {
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+                }
+                catch (DbUpdateConcurrencyException)
+                {
+                    dbContext.ChangeTracker.Clear();
+                    continue;
+                }
+                catch (DbUpdateException)
+                {
+                    return new VerifyOtpResult(VerifyOtpStatus.PersistenceFailure);
+                }
+            }
+
+            challenge.ConsumedAt = now;
+
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                dbContext.ChangeTracker.Clear();
+                continue;
+            }
+            catch (DbUpdateException)
+            {
+                return new VerifyOtpResult(VerifyOtpStatus.PersistenceFailure);
+            }
+
+            var token = jwtTokenService.CreateToken(challenge.User, now);
+            return new VerifyOtpResult(
+                VerifyOtpStatus.Success,
+                new VerifyOtpResponse(token.AccessToken, token.TokenType, token.ExpiresIn, token.ExpiresAt));
+        }
+
+        return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+    }
+
+    public async Task<CurrentUserResponse?> GetActiveUserAsync(
+        Guid userId,
+        CancellationToken cancellationToken = default)
+    {
+        return await dbContext.Users
+            .AsNoTracking()
+            .Where(user => user.Id == userId && user.IsActive)
+            .Select(user => new CurrentUserResponse(user.Id, user.Email, user.FullName))
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     private static bool IsUniqueEmailViolation(DbUpdateException exception) =>

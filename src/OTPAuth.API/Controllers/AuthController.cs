@@ -1,4 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using OTPAuth.API.DTOs;
 using OTPAuth.API.Services;
 
@@ -75,5 +78,59 @@ public class AuthController(IAuthService authService) : ControllerBase
                     "Không thể hoàn tất đăng nhập. Vui lòng thử lại sau.",
                     "INTERNAL_ERROR"))
         };
+    }
+
+    [HttpPost("verify-otp")]
+    [ProducesResponseType(typeof(VerifyOtpResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public async Task<ActionResult<VerifyOtpResponse>> VerifyOtp(
+        VerifyOtpRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await authService.VerifyOtpAsync(request, cancellationToken);
+
+        return result.Status switch
+        {
+            VerifyOtpStatus.Success => Ok(result.Response),
+            VerifyOtpStatus.VerificationFailed => Unauthorized(CreateProblem(
+                StatusCodes.Status401Unauthorized,
+                "Mã xác thực không hợp lệ.",
+                "OTP_VERIFICATION_FAILED")),
+            _ => StatusCode(
+                StatusCodes.Status500InternalServerError,
+                CreateProblem(
+                    StatusCodes.Status500InternalServerError,
+                    "Không thể hoàn tất xác thực. Vui lòng thử lại sau.",
+                    "INTERNAL_ERROR"))
+        };
+    }
+
+    [Authorize]
+    [HttpGet("me")]
+    [ProducesResponseType(typeof(CurrentUserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<CurrentUserResponse>> Me(CancellationToken cancellationToken)
+    {
+        var subject = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (!Guid.TryParse(subject, out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var user = await authService.GetActiveUserAsync(userId, cancellationToken);
+        if (user is null)
+        {
+            return StatusCode(
+                StatusCodes.Status403Forbidden,
+                CreateProblem(
+                    StatusCodes.Status403Forbidden,
+                    "Tài khoản không còn hoạt động.",
+                    "ACCOUNT_INACTIVE"));
+        }
+
+        return Ok(user);
     }
 }

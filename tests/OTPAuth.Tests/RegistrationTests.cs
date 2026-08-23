@@ -93,7 +93,7 @@ public class RegistrationTests
     }
 
     private static AuthService CreateService(AppDbContext context) =>
-        new(context, new PasswordHasher<User>(), TimeProvider.System, CreateOtpService(), new FakeEmailService());
+        new(context, new PasswordHasher<User>(), TimeProvider.System, CreateOtpService(), new FakeEmailService(), new FakeJwtTokenService());
 
     private static OtpService CreateOtpService() =>
         new(Options.Create(new OtpOptions()), Enumerable.Range(0, 32).Select(index => (byte)index).ToArray());
