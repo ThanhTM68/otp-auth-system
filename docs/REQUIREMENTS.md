@@ -156,6 +156,8 @@ Hiện thực Phase 7 dùng DTO allowlist (`challengeId`, `otp` đúng 6 chữ s
 7. Hai request resend đồng thời phải được bảo vệ bằng transaction/concurrency token để tối đa một challenge mới còn active.
 8. Nếu gửi email thất bại, server không khôi phục challenge cũ và thực hiện best-effort compensation để revoke challenge mới. Client nhận lỗi tạm thời và phải login lại; trường hợp compensation lỗi được giới hạn bởi TTL/flow expiry.
 
+Hiện thực Phase 8 chỉ nhận `challengeId`, lấy User/email/state từ database và dùng UTC server time. Challenge phải là `LOGIN`, User active, chưa consumed/revoked/locked, còn flow và còn lượt resend. Cooldown được cấu hình tập trung tại `Otp:ResendCooldownSeconds = 60`; tại đúng ranh giới 60 giây resend được phép. Transaction SQL ngắn persist revoke challenge cũ trước khi tạo challenge mới; challenge mới giữ `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, reset attempts và lưu HMAC OTP mới. SMTP dùng lại `IEmailService` sau commit; nếu delivery lỗi, challenge mới được best-effort revoke và challenge cũ không được kích hoạt lại. Rate limiting và audit event chi tiết vẫn chưa thuộc phase này.
+
 ### 7.6. Authentication Success Flow
 
 1. Việc consume OTP và audit đã commit thành công.

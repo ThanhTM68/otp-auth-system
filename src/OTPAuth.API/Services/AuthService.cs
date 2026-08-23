@@ -12,6 +12,7 @@ public interface IAuthService
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
     Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
     Task<VerifyOtpResult> VerifyOtpAsync(VerifyOtpRequest request, CancellationToken cancellationToken = default);
+    Task<ResendOtpResult> ResendOtpAsync(ResendOtpRequest request, CancellationToken cancellationToken = default);
     Task<CurrentUserResponse?> GetActiveUserAsync(Guid userId, CancellationToken cancellationToken = default);
 }
 
@@ -42,6 +43,20 @@ public enum VerifyOtpStatus
 }
 
 public sealed record VerifyOtpResult(VerifyOtpStatus Status, VerifyOtpResponse? Response = null);
+
+public enum ResendOtpStatus
+{
+    Success,
+    NotAvailable,
+    Cooldown,
+    EmailDeliveryFailure,
+    PersistenceFailure
+}
+
+public sealed record ResendOtpResult(
+    ResendOtpStatus Status,
+    ResendOtpResponse? Response = null,
+    int? RetryAfterSeconds = null);
 
 public class AuthService(
     AppDbContext dbContext,
@@ -176,7 +191,7 @@ public class AuthService(
                 Purpose: challenge.Purpose,
                 ExpiresAt: challenge.ExpiresAt,
                 FlowExpiresAt: challenge.FlowExpiresAt,
-                ResendAvailableAt: challenge.CreatedAt.AddMinutes(1)));
+                ResendAvailableAt: otpService.GetResendAvailableAt(challenge)));
     }
 
     public async Task<VerifyOtpResult> VerifyOtpAsync(
@@ -243,6 +258,101 @@ public class AuthService(
         return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
     }
 
+    public async Task<ResendOtpResult> ResendOtpAsync(
+        ResendOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var now = timeProvider.GetUtcNow();
+        const int maxConcurrencyRetries = 3;
+
+        for (var attempt = 0; attempt < maxConcurrencyRetries; attempt++)
+        {
+            var previousChallenge = await dbContext.OtpChallenges
+                .Include(challenge => challenge.User)
+                .SingleOrDefaultAsync(challenge => challenge.Id == request.ChallengeId, cancellationToken);
+
+            if (previousChallenge is null || previousChallenge.User is null || !previousChallenge.User.IsActive ||
+                previousChallenge.Purpose != "LOGIN" || previousChallenge.IsRevoked ||
+                previousChallenge.ConsumedAt is not null || !otpService.CanAttempt(previousChallenge) ||
+                now >= previousChallenge.FlowExpiresAt)
+            {
+                return new ResendOtpResult(ResendOtpStatus.NotAvailable);
+            }
+
+            var resendAvailableAt = otpService.GetResendAvailableAt(previousChallenge);
+            if (now < resendAvailableAt)
+            {
+                var retryAfterSeconds = Math.Max(1, (int)Math.Ceiling((resendAvailableAt - now).TotalSeconds));
+                return new ResendOtpResult(ResendOtpStatus.Cooldown, RetryAfterSeconds: retryAfterSeconds);
+            }
+
+            if (!otpService.CanResend(previousChallenge, now))
+            {
+                return new ResendOtpResult(ResendOtpStatus.NotAvailable);
+            }
+
+            OtpChallengeCreation creation;
+            try
+            {
+                await using var transaction = dbContext.Database.IsRelational()
+                    ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+                    : null;
+
+                otpService.RevokeChallenge(previousChallenge);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                creation = otpService.CreateResendLoginChallenge(previousChallenge.User, previousChallenge, now);
+                dbContext.OtpChallenges.Add(creation.Challenge);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                if (transaction is not null)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                }
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                dbContext.ChangeTracker.Clear();
+                continue;
+            }
+            catch (DbUpdateException)
+            {
+                return new ResendOtpResult(ResendOtpStatus.PersistenceFailure);
+            }
+
+            try
+            {
+                await emailService.SendOtpAsync(
+                    new OtpEmailMessage(previousChallenge.User.Email, creation.Otp, creation.Challenge.ExpiresAt),
+                    cancellationToken);
+            }
+            catch (EmailDeliveryException)
+            {
+                var revoked = await RevokeAfterFailedDeliveryAsync(creation.Challenge.Id, cancellationToken);
+                return new ResendOtpResult(
+                    revoked ? ResendOtpStatus.EmailDeliveryFailure : ResendOtpStatus.PersistenceFailure);
+            }
+
+            if (!await IsChallengeUsableAfterDeliveryAsync(creation.Challenge.Id, cancellationToken))
+            {
+                var revoked = await RevokeAfterFailedDeliveryAsync(creation.Challenge.Id, cancellationToken);
+                return new ResendOtpResult(
+                    revoked ? ResendOtpStatus.EmailDeliveryFailure : ResendOtpStatus.PersistenceFailure);
+            }
+
+            return new ResendOtpResult(
+                ResendOtpStatus.Success,
+                new ResendOtpResponse(
+                    creation.Challenge.Id,
+                    creation.Challenge.Purpose,
+                    creation.Challenge.ExpiresAt,
+                    creation.Challenge.FlowExpiresAt,
+                    otpService.GetResendAvailableAt(creation.Challenge)));
+        }
+
+        return new ResendOtpResult(ResendOtpStatus.NotAvailable);
+    }
+
     public async Task<CurrentUserResponse?> GetActiveUserAsync(
         Guid userId,
         CancellationToken cancellationToken = default)
@@ -252,6 +362,50 @@ public class AuthService(
             .Where(user => user.Id == userId && user.IsActive)
             .Select(user => new CurrentUserResponse(user.Id, user.Email, user.FullName))
             .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    private async Task<bool> IsChallengeUsableAfterDeliveryAsync(Guid challengeId, CancellationToken cancellationToken)
+    {
+        var challenge = await dbContext.OtpChallenges
+            .AsNoTracking()
+            .Include(candidate => candidate.User)
+            .SingleOrDefaultAsync(candidate => candidate.Id == challengeId, cancellationToken);
+
+        return challenge is not null && challenge.User is not null && challenge.User.IsActive &&
+            otpService.IsUsable(challenge, timeProvider.GetUtcNow());
+    }
+
+    private async Task<bool> RevokeAfterFailedDeliveryAsync(Guid challengeId, CancellationToken cancellationToken)
+    {
+        const int maxConcurrencyRetries = 3;
+
+        for (var attempt = 0; attempt < maxConcurrencyRetries; attempt++)
+        {
+            var challenge = await dbContext.OtpChallenges
+                .SingleOrDefaultAsync(candidate => candidate.Id == challengeId, cancellationToken);
+
+            if (challenge is null || challenge.IsRevoked || challenge.ConsumedAt is not null)
+            {
+                return true;
+            }
+
+            otpService.RevokeChallenge(challenge);
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+                return true;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                dbContext.ChangeTracker.Clear();
+            }
+            catch (DbUpdateException)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsUniqueEmailViolation(DbUpdateException exception) =>

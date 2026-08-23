@@ -8,4 +8,6 @@ public sealed class OtpOptions
     public int TtlMinutes { get; init; } = 3;
     public int FlowTtlMinutes { get; init; } = 10;
     public short MaxAttempts { get; init; } = 5;
+    public int ResendCooldownSeconds { get; init; } = 60;
+    public short MaxResends { get; init; } = 3;
 }

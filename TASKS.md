@@ -108,12 +108,12 @@
 
 ## PHASE 8 - Resend OTP
 
-- [ ] Resend API
-- [ ] Resend cooldown
-- [ ] Revoke previous OTP
-- [ ] Generate new OTP
-- [ ] Send email
-- [ ] Unit Test
+- [x] Resend API
+- [x] Resend cooldown
+- [x] Revoke previous OTP
+- [x] Generate new OTP
+- [x] Send email
+- [x] Unit Test
 
 ---
 

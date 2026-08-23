@@ -267,6 +267,8 @@ sequenceDiagram
     AC-->>C: 200 metadata or 503 after best-effort revoke
 ```
 
+Hiện thực Phase 8 dùng `ResendOtpRequest` chỉ có `challengeId`. `AuthService` tải challenge cùng User từ database, dùng `CreatedAt` và `TimeProvider` UTC cho cooldown 60 giây, sau đó dùng `RowVersion`/retry có giới hạn để revoke challenge cũ và tạo challenge kế nhiệm trong transaction SQL ngắn. OTP plaintext chỉ được giữ tạm trong `OtpChallengeCreation` để gọi `IEmailService` sau commit; delivery failure kích hoạt best-effort revoke challenge mới. Không có JWT trong luồng resend.
+
 Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa hết hạn trước khi trả `200`. Nếu mã đã hết hạn trong lúc gửi, response là `503`, server best-effort revoke challenge mới và email đến muộn không được coi là usable.
 
 ## 7. Transaction và concurrency

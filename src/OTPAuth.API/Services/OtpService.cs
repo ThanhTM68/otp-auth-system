@@ -14,10 +14,13 @@ public interface IOtpService
     byte[] HashOtp(OtpChallenge challenge, string otp);
     bool VerifyOtp(OtpChallenge challenge, string otp);
     OtpChallengeCreation CreateLoginChallenge(User user, DateTimeOffset createdAt);
+    OtpChallengeCreation CreateResendLoginChallenge(User user, OtpChallenge previousChallenge, DateTimeOffset createdAt);
     bool IsExpired(OtpChallenge challenge, DateTimeOffset now);
     bool CanAttempt(OtpChallenge challenge);
     bool IsUsable(OtpChallenge challenge, DateTimeOffset now);
     bool TryRecordFailedAttempt(OtpChallenge challenge, DateTimeOffset now);
+    DateTimeOffset GetResendAvailableAt(OtpChallenge challenge);
+    bool CanResend(OtpChallenge challenge, DateTimeOffset now);
     void RevokeChallenge(OtpChallenge challenge);
 }
 
@@ -82,6 +85,38 @@ public sealed class OtpService : IOtpService
         return new OtpChallengeCreation(challenge, otp);
     }
 
+    public OtpChallengeCreation CreateResendLoginChallenge(
+        User user,
+        OtpChallenge previousChallenge,
+        DateTimeOffset createdAt)
+    {
+        if (previousChallenge.Purpose != "LOGIN" || previousChallenge.ResendCount >= options.MaxResends)
+        {
+            throw new InvalidOperationException("The challenge cannot be resent.");
+        }
+
+        var expiresAt = Min(createdAt.AddMinutes(options.TtlMinutes), previousChallenge.FlowExpiresAt);
+        var challenge = new OtpChallenge
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            AuthenticationFlowId = previousChallenge.AuthenticationFlowId,
+            Purpose = "LOGIN",
+            CreatedAt = createdAt,
+            ExpiresAt = expiresAt,
+            FlowExpiresAt = previousChallenge.FlowExpiresAt,
+            ConsumedAt = null,
+            AttemptCount = 0,
+            MaxAttempts = options.MaxAttempts,
+            ResendCount = checked((short)(previousChallenge.ResendCount + 1)),
+            IsRevoked = false
+        };
+
+        var otp = GenerateOtp();
+        challenge.OtpHash = HashOtp(challenge, otp);
+        return new OtpChallengeCreation(challenge, otp);
+    }
+
     public bool IsExpired(OtpChallenge challenge, DateTimeOffset now) => now >= challenge.ExpiresAt;
 
     public bool CanAttempt(OtpChallenge challenge) => challenge.AttemptCount < challenge.MaxAttempts;
@@ -109,6 +144,18 @@ public sealed class OtpService : IOtpService
 
         return true;
     }
+
+    public DateTimeOffset GetResendAvailableAt(OtpChallenge challenge) =>
+        challenge.CreatedAt.AddSeconds(options.ResendCooldownSeconds);
+
+    public bool CanResend(OtpChallenge challenge, DateTimeOffset now) =>
+        challenge.Purpose == "LOGIN" &&
+        !challenge.IsRevoked &&
+        challenge.ConsumedAt is null &&
+        CanAttempt(challenge) &&
+        challenge.ResendCount < options.MaxResends &&
+        now < challenge.FlowExpiresAt &&
+        now >= GetResendAvailableAt(challenge);
 
     public void RevokeChallenge(OtpChallenge challenge) => challenge.IsRevoked = true;
 
@@ -177,9 +224,10 @@ public sealed class OtpService : IOtpService
     private static void ValidateOptions(OtpOptions otpOptions)
     {
         if (otpOptions.Length != 6 || otpOptions.TtlMinutes != 3 ||
-            otpOptions.FlowTtlMinutes != 10 || otpOptions.MaxAttempts is < 1 or > 5)
+            otpOptions.FlowTtlMinutes != 10 || otpOptions.MaxAttempts is < 1 or > 5 ||
+            otpOptions.ResendCooldownSeconds != 60 || otpOptions.MaxResends != 3)
         {
-            throw new InvalidOperationException("OTP options must use 6 digits, 3-minute TTL, 10-minute flow TTL, and 1-5 attempts.");
+            throw new InvalidOperationException("OTP options must use 6 digits, 3-minute TTL, 10-minute flow TTL, 1-5 attempts, a 60-second resend cooldown, and 3 resends.");
         }
     }
 }

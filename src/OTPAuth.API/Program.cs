@@ -59,8 +59,10 @@ builder.Services.AddOptions<OtpOptions>()
         options.Length == 6 &&
         options.TtlMinutes == 3 &&
         options.FlowTtlMinutes == 10 &&
-        options.MaxAttempts is >= 1 and <= 5,
-        "OTP options must use 6 digits, 3-minute TTL, 10-minute flow TTL, and 1-5 attempts.")
+        options.MaxAttempts is >= 1 and <= 5 &&
+        options.ResendCooldownSeconds == 60 &&
+        options.MaxResends == 3,
+        "OTP options must use 6 digits, 3-minute TTL, 10-minute flow TTL, 1-5 attempts, a 60-second resend cooldown, and 3 resends.")
     .ValidateOnStart();
 builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection(EmailOptions.SectionName));
 
