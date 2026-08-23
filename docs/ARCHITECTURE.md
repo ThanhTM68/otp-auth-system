@@ -125,7 +125,7 @@ Thứ tự logic đề xuất:
 7. Model binding/DTO validation.
 8. Controller và Service; tại đây mới áp dụng quota cần normalized email, challenge hoặc User.
 
-Hiện thực Phase 9 gắn policy fixed-window độc lập theo IP cho `login` (5/60 giây), `verify-otp` (10/60 giây) và `resend-otp` (3/300 giây). Middleware không tự đọc body có password/OTP để tạo partition key; `register` chưa bị áp policy. Các quota theo User/email trong thiết kế là bước sau. `GET /api/auth/me` bắt buộc JWT hợp lệ; một active-user authorization policy lấy UserId từ claim `sub`, đọc User từ database và trả `403` nếu tài khoản đã inactive. Mọi protected endpoint tương lai phải dùng cùng policy để disable User có hiệu lực ngay.
+Hiện thực sau Phase 13 gắn policy fixed-window độc lập theo IP cho `register` (5/3600 giây), `login` (5/60 giây), `verify-otp` (10/60 giây) và `resend-otp` (3/300 giây). Middleware không đọc body có password/OTP để tạo partition key; auth POST body tối đa 16 KiB. Các quota dùng chung theo User/normalized email vẫn là việc còn lại. `GET /api/auth/me` bắt buộc JWT hợp lệ, lấy UserId từ claim `sub`, đọc lại User từ database và trả `403` nếu tài khoản đã inactive. Mọi protected endpoint tương lai phải tái sử dụng cùng kiểm tra active-user để disable User có hiệu lực ngay.
 
 ## 5. Trust boundary và luồng dữ liệu nhạy cảm
 
@@ -289,8 +289,8 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 - Thêm filtered unique index trên `(UserId, Purpose)` khi `IsRevoked = 0 AND ConsumedAt IS NULL`.
 - Dùng transaction ngắn với isolation `Serializable` cho revoke/create challenge; xử lý unique/concurrency exception theo hướng fail closed.
 - Verify đúng dùng conditional update/concurrency check; commit `ConsumedAt` trước khi cấp JWT.
-- Verify đúng/sai dùng `RowVersion` optimistic concurrency trong transaction ngắn. Khi conflict, service xóa tracked state, reload và đánh giá lại toàn bộ state với cùng request, tối đa 3 lần; nếu vẫn conflict thì fail closed với lỗi verify chung. Vì vậy JWT chỉ được tạo bởi request đã commit `ConsumedAt`, không có lost update trong các update đã commit và challenge khóa sau 5 lần sai đã commit.
-- Lấy một giá trị `now` UTC từ `TimeProvider` cho toàn bộ quyết định trong một operation; `now >= ExpiresAt` nghĩa là hết hạn.
+- Verify đúng/sai dùng `RowVersion` optimistic concurrency trong transaction ngắn. Khi conflict, service xóa tracked state, reload và đánh giá lại toàn bộ state với cùng request, tối đa 6 lần; nếu vẫn conflict thì fail closed với lỗi verify chung. Sáu lượt đủ để quan sát tối đa 5 attempt transition rồi trạng thái terminal. Vì vậy JWT chỉ được tạo bởi request đã commit `ConsumedAt`, không có lost update trong các update đã commit và challenge khóa sau 5 lần sai đã commit.
+- Lấy lại `now` UTC từ `TimeProvider` ở mỗi concurrency retry và ngay sau phép so sánh HMAC trước khi mutate state; `now >= ExpiresAt` nghĩa là hết hạn.
 
 ### Các race condition bắt buộc test
 
@@ -315,6 +315,7 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 ## 9. Logging và audit
 
 - Application log chỉ chứa thông tin vận hành tối thiểu như trace ID, event code và thời lượng.
+- Logging provider của EF Core bị tắt trong bản demo để raw SQL/provider exception và stack không đi vòng qua exception boundary; lỗi ngoài dự kiến chỉ ghi exception type cùng trace ID đã sanitize. Môi trường production cần sink bảo mật riêng nếu muốn giữ diagnostic sâu hơn.
 - Audit log chứa event bảo mật dạng cấu trúc, do `IAuditService` trung tâm tạo từ `AuthService`, không phải controller. Event đã có: `REGISTER_SUCCESS`, `LOGIN_PASSWORD_SUCCESS`, `LOGIN_PASSWORD_FAILED`, `OTP_CREATED`, `OTP_DELIVERY_FAILED`, `OTP_VERIFY_FAILED`, `OTP_EXPIRED`, `OTP_REPLAY_REJECTED`, `OTP_MAX_ATTEMPTS_REACHED`, `OTP_VERIFY_SUCCESS`, `JWT_ISSUED`, `OTP_RESEND_SUCCESS`, `OTP_RESEND_FAILED`.
 - Thay đổi state quan trọng (register, tạo challenge login, verify sai/consume OTP) ghi audit cùng `SaveChanges` khi có thể. Các event sau SMTP/JWT dùng best-effort; nếu ghi audit thất bại, chỉ log mã event an toàn và không làm thay đổi kết quả xác thực đã commit.
 - Rate limit không ghi audit theo từng request để tránh log flood.
@@ -331,7 +332,7 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 | Database | SQL Server connection string | Không commit password |
 | Rate limit | Window/permit theo endpoint và partition | Theo bảng trong REQUIREMENTS.md |
 
-Các key JWT và OTP phải khác nhau. Local development dùng .NET User Secrets hoặc environment variables; deployment dùng secret store phù hợp. Repository chỉ chứa tên key hoặc placeholder, không chứa giá trị thật. Ứng dụng phải fail startup nếu production thiếu secret bắt buộc hoặc dùng placeholder/yếu.
+Các key JWT và OTP phải khác nhau. Local development dùng .NET User Secrets hoặc environment variables; deployment dùng secret store phù hợp. Repository chỉ chứa tên key hoặc placeholder, không chứa giá trị thật. Ứng dụng fail startup nếu thiếu key, key ngắn hơn 256 bit hoặc hai key giống nhau. JWT validation chỉ chấp nhận token đã ký bằng HS256, đúng issuer/audience, có expiration 15 phút và còn lifetime.
 
 ## 11. Khả năng kiểm thử ở các phase sau
 

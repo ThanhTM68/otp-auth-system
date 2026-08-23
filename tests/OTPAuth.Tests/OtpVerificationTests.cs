@@ -111,6 +111,30 @@ public class OtpVerificationTests
         Assert.Null((await context.OtpChallenges.SingleAsync()).ConsumedAt);
     }
 
+    [Fact]
+    public async Task OtpThatExpiresDuringVerification_IsRejectedWithoutConsumeOrJwt()
+    {
+        await using var context = CreateContext();
+        var otpService = CreateOtpService();
+        var user = await AddUserAsync(context);
+        var challenge = await AddChallengeAsync(
+            context,
+            otpService,
+            user,
+            "004821",
+            expiresAt: FixedNow.AddMinutes(2));
+        var timeProvider = new SequenceTimeProvider(FixedNow, challenge.ExpiresAt);
+
+        var result = await CreateAuthService(context, otpService, timeProvider).VerifyOtpAsync(
+            new VerifyOtpRequest { ChallengeId = challenge.Id, Otp = "004821" });
+
+        var persistedChallenge = await context.OtpChallenges.SingleAsync();
+        Assert.Equal(VerifyOtpStatus.VerificationFailed, result.Status);
+        Assert.Null(result.Response);
+        Assert.Null(persistedChallenge.ConsumedAt);
+        Assert.Equal((short)0, persistedChallenge.AttemptCount);
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -173,11 +197,14 @@ public class OtpVerificationTests
         return new AppDbContext(options);
     }
 
-    private static AuthService CreateAuthService(AppDbContext context, OtpService otpService) =>
+    private static AuthService CreateAuthService(
+        AppDbContext context,
+        OtpService otpService,
+        TimeProvider? timeProvider = null) =>
         new(
             context,
             new PasswordHasher<User>(),
-            new FixedTimeProvider(FixedNow),
+            timeProvider ?? new FixedTimeProvider(FixedNow),
             otpService,
             new FakeEmailService(),
             new JwtTokenService(CreateJwtOptions(), JwtSigningKey),
@@ -270,5 +297,17 @@ public class OtpVerificationTests
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class SequenceTimeProvider(params DateTimeOffset[] timestamps) : TimeProvider
+    {
+        private int currentIndex;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var index = Math.Min(currentIndex, timestamps.Length - 1);
+            currentIndex++;
+            return timestamps[index];
+        }
     }
 }

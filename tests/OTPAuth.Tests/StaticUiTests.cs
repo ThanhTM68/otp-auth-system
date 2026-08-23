@@ -24,6 +24,23 @@ public class StaticUiTests
         Assert.DoesNotContain("OtpHash", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("PasswordHash", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ConnectionStrings", html, StringComparison.OrdinalIgnoreCase);
+        AssertHeaderContains(response, "Content-Security-Policy", "frame-ancestors 'none'");
+        AssertHeaderContains(response, "X-Frame-Options", "DENY");
+        AssertHeaderContains(response, "X-Content-Type-Options", "nosniff");
+        AssertHeaderContains(response, "Referrer-Policy", "no-referrer");
+    }
+
+    [Fact]
+    public async Task SensitiveForms_UsePostFallbackWithoutPuttingCredentialsInUrl()
+    {
+        using var factory = new SecurityWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var html = await client.GetStringAsync("/");
+
+        Assert.Contains("<form id=\"login-form\" method=\"post\" action=\"/api/auth/login\">", html, StringComparison.Ordinal);
+        Assert.Contains("<form id=\"register-form\" method=\"post\" action=\"/api/auth/register\">", html, StringComparison.Ordinal);
+        Assert.Contains("<form id=\"otp-form\" method=\"post\" action=\"/api/auth/verify-otp\">", html, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -55,5 +72,14 @@ public class StaticUiTests
         Assert.DoesNotContain("SigningKey", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("HashingKey", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ConnectionStrings", script, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AssertHeaderContains(
+        HttpResponseMessage response,
+        string headerName,
+        string expectedValue)
+    {
+        Assert.True(response.Headers.TryGetValues(headerName, out var values));
+        Assert.Contains(expectedValue, string.Join(",", values), StringComparison.OrdinalIgnoreCase);
     }
 }

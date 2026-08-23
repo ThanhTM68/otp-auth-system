@@ -9,6 +9,7 @@ namespace OTPAuth.Tests;
 public class RateLimitingTests
 {
     [Theory]
+    [InlineData("/api/auth/register", 5)]
     [InlineData("/api/auth/login", 5)]
     [InlineData("/api/auth/verify-otp", 10)]
     [InlineData("/api/auth/resend-otp", 3)]
@@ -27,8 +28,10 @@ public class RateLimitingTests
         var body = await rejectedResponse.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.TooManyRequests, rejectedResponse.StatusCode);
+        Assert.Equal("application/problem+json", rejectedResponse.Content.Headers.ContentType?.MediaType);
         Assert.True(rejectedResponse.Headers.Contains("Retry-After"));
         Assert.Contains("RATE_LIMITED", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("register", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("login", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("verify-otp", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("resend-otp", body, StringComparison.OrdinalIgnoreCase);
@@ -51,7 +54,7 @@ public class RateLimitingTests
     }
 
     [Fact]
-    public async Task Register_IsNotRateLimitedByAuthenticationPolicies()
+    public async Task LoginLimit_DoesNotConsumeRegisterPolicy()
     {
         using var factory = CreateFactory();
         using var client = CreateHttpsClient(factory);
@@ -77,12 +80,13 @@ public class RateLimitingTests
 
     private sealed class RateLimitingWebApplicationFactory : WebApplicationFactory<global::Program>
     {
-        private static readonly string TestKey = Convert.ToBase64String(Enumerable.Repeat((byte)42, 32).ToArray());
+        private static readonly string OtpTestKey = Convert.ToBase64String(Enumerable.Repeat((byte)42, 32).ToArray());
+        private static readonly string JwtTestKey = Convert.ToBase64String(Enumerable.Repeat((byte)43, 32).ToArray());
 
         public RateLimitingWebApplicationFactory()
         {
-            Environment.SetEnvironmentVariable("Otp__HashingKey", TestKey);
-            Environment.SetEnvironmentVariable("Jwt__SigningKey", TestKey);
+            Environment.SetEnvironmentVariable("Otp__HashingKey", OtpTestKey);
+            Environment.SetEnvironmentVariable("Jwt__SigningKey", JwtTestKey);
             Environment.SetEnvironmentVariable("Jwt__Issuer", "OTPAuth.API.Tests");
             Environment.SetEnvironmentVariable("Jwt__Audience", "OTPAuth.Client.Tests");
         }

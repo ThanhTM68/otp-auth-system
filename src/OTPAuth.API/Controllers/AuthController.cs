@@ -11,9 +11,12 @@ namespace OTPAuth.API.Controllers;
 
 [ApiController]
 [Route("api/auth")]
+[RequestSizeLimit(16 * 1024)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status413PayloadTooLarge)]
 public class AuthController(IAuthService authService) : ControllerBase
 {
     [HttpPost("register")]
+    [EnableRateLimiting(AuthenticationRateLimitPolicies.Register)]
     [ProducesResponseType(typeof(RegisterResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -40,12 +43,16 @@ public class AuthController(IAuthService authService) : ControllerBase
         };
     }
 
-    private static ProblemDetails CreateProblem(int status, string title, string code) =>
+    private ProblemDetails CreateProblem(int status, string title, string code) =>
         new()
         {
             Status = status,
             Title = title,
-            Extensions = { ["code"] = code }
+            Extensions =
+            {
+                ["code"] = code,
+                ["traceId"] = HttpContext.TraceIdentifier
+            }
         };
 
     [HttpPost("login")]

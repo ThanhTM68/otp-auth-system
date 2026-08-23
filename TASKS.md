@@ -87,7 +87,7 @@
 - [x] Email template
 - [x] Không log OTP
 - [x] Login email integration
-- [ ] Development safe mode nếu cần
+- [x] Development safe mode nếu cần
 
 ---
 
@@ -161,14 +161,14 @@
 
 ## PHASE 13 - Security Review
 
-- [ ] Review Password Security
-- [ ] Review OTP Security
-- [ ] Review JWT
-- [ ] Review Secrets
-- [ ] Review Logging
-- [ ] Review SQL Injection
-- [ ] Review Validation
-- [ ] Review Rate Limiting
+- [x] Review Password Security
+- [x] Review OTP Security
+- [x] Review JWT
+- [x] Review Secrets
+- [x] Review Logging
+- [x] Review SQL Injection
+- [x] Review Validation
+- [x] Review Rate Limiting
 
 ---
 

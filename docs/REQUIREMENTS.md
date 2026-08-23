@@ -76,7 +76,7 @@ Tài liệu được khởi tạo ở Phase 0 và tiếp tục là nguồn yêu 
 | FR-08 | Resend phải tuân thủ cooldown 60 giây, revoke challenge cũ và tạo OTP/challenge mới. |
 | FR-09 | JWT chỉ được cấp sau khi thao tác consume OTP đã commit thành công. |
 | FR-10 | API protected phải yêu cầu JWT hợp lệ. |
-| FR-11 | Các endpoint `login`, `verify-otp` và `resend-otp` phải được rate limit. |
+| FR-11 | Các endpoint `register`, `login`, `verify-otp` và `resend-otp` phải được rate limit. |
 | FR-12 | Các sự kiện bảo mật bắt buộc phải được ghi vào audit log với dữ liệu đã được kiểm soát. |
 | FR-13 | Một authentication flow có hạn tuyệt đối mặc định 10 phút và tối đa 3 lần resend; hết giới hạn phải nhập lại password. |
 | FR-14 | Quota phát OTP theo User phải áp dụng chung cho cả login password thành công và resend. |
@@ -143,7 +143,7 @@ Hiện thực Phase 6 persist `OtpHash` trước, sau đó chuyển OTP plaintex
 
 Client nhận thông báo chung cho OTP/challenge sai, hết hạn, đã dùng, đã revoke hoặc bị khóa. Lý do chi tiết chỉ xuất hiện dưới dạng reason code đã sanitize trong audit log.
 
-Hiện thực dùng DTO allowlist (`challengeId`, `otp` đúng 6 chữ số), HMAC fixed-time, UTC server time và `RowVersion` của EF Core. Khi OTP sai, thay đổi `AttemptCount` (và revoke ở lần sai thứ 5) phải persist thành công trước khi trả lỗi; khi OTP đúng, `ConsumedAt` phải persist thành công trước khi JWT được tạo. Một conflict concurrency sẽ reload state và thử lại tối đa 3 lần, sau đó fail closed với phản hồi verify chung. Phase 10 ghi event allowlist qua `IAuditService`; state audit quan trọng đi cùng transaction khi có thể, còn audit sau JWT/SMTP là best-effort và không chứa secret.
+Hiện thực dùng DTO allowlist (`challengeId`, `otp` đúng 6 chữ số), HMAC fixed-time, UTC server time và `RowVersion` của EF Core. Khi OTP sai, thay đổi `AttemptCount` (và revoke ở lần sai thứ 5) phải persist thành công trước khi trả lỗi; khi OTP đúng, `ConsumedAt` phải persist thành công trước khi JWT được tạo. Một conflict concurrency sẽ reload state, lấy lại thời gian server và thử lại tối đa 6 lần, đủ để quan sát 5 chuyển trạng thái attempt rồi trạng thái terminal; sau đó vẫn fail closed với phản hồi verify chung. Thời gian cũng được lấy lại ngay sau phép so sánh HMAC trước khi mutate state. Phase 10 ghi event allowlist qua `IAuditService`; state audit quan trọng đi cùng transaction khi có thể, còn audit sau JWT/SMTP là best-effort và không chứa secret.
 
 ### 7.5. Resend OTP Flow
 
@@ -213,7 +213,7 @@ Hiện thực Phase 8 chỉ nhận `challengeId`, lấy User/email/state từ da
 
 Middleware chỉ thực hiện quota thô theo IP/endpoint và giới hạn kích thước request. Quota cần normalized email, challenge hoặc User được thực hiện ở tầng application/service sau validation/lookup; middleware không tự đọc body chứa password/OTP. Khi rate limit/cooldown bị vượt, API trả `429 Too Many Requests` và `Retry-After` khi có thể. Deployment demo một instance có thể dùng bộ đếm trong memory. Nếu triển khai nhiều instance, bộ đếm phân tán là vấn đề cần thiết kế lại; Phase 0 không bổ sung Redis.
 
-Hiện thực Phase 9 dùng middleware chính thức `Microsoft.AspNetCore.RateLimiting` với fixed-window partition theo `HttpContext.Connection.RemoteIpAddress` (fallback `unknown`). Các policy độc lập là login 5 request/60 giây/IP, verify OTP 10 request/60 giây/IP và resend OTP 3 request/300 giây/IP. Khi từ chối, API trả `429`, Problem Details generic `RATE_LIMITED`, `Cache-Control: no-store` và `Retry-After` khi lease cung cấp metadata. `AttemptCount`/`MaxAttempts` và cooldown resend 60 giây vẫn là các lớp kiểm soát độc lập; register và `/api/auth/me` không bị áp policy trong phase này.
+Hiện thực sau Phase 13 dùng middleware chính thức `Microsoft.AspNetCore.RateLimiting` với fixed-window partition theo `HttpContext.Connection.RemoteIpAddress` (fallback `unknown`). Các policy độc lập là register 5 request/3600 giây/IP, login 5 request/60 giây/IP, verify OTP 10 request/60 giây/IP và resend OTP 3 request/300 giây/IP. Auth POST body bị giới hạn 16 KiB và request có `Content-Length` vượt ngưỡng bị từ chối sớm bằng `413`. Khi rate limit từ chối, API trả `429`, Problem Details generic `RATE_LIMITED`, `Cache-Control: no-store` và `Retry-After` khi lease cung cấp metadata. `AttemptCount`/`MaxAttempts` và cooldown resend 60 giây vẫn là các lớp kiểm soát độc lập; `/api/auth/me` không bị áp policy. Quota dùng chung theo normalized email/User giữa login và resend vẫn là rủi ro còn lại được ghi trong `SECURITY_REVIEW.md`.
 
 ## 11. Đối chiếu SECURITY_REQUIREMENTS.md
 

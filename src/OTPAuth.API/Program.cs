@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 using OTPAuth.API.Configuration;
 using OTPAuth.API.Data;
@@ -28,6 +30,7 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
             Title = "Dữ liệu gửi lên không hợp lệ."
         };
         problem.Extensions["code"] = "VALIDATION_ERROR";
+        problem.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
         return new BadRequestObjectResult(problem);
     };
 });
@@ -91,9 +94,9 @@ var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<Jw
     ?? throw new InvalidOperationException("Jwt configuration is required.");
 if (string.IsNullOrWhiteSpace(jwtOptions.Issuer) ||
     string.IsNullOrWhiteSpace(jwtOptions.Audience) ||
-    jwtOptions.ExpirationMinutes <= 0)
+    jwtOptions.ExpirationMinutes != 15)
 {
-    throw new InvalidOperationException("Jwt issuer, audience, and expiration are required.");
+    throw new InvalidOperationException("Jwt issuer and audience are required, and expiration must be 15 minutes.");
 }
 
 var encodedJwtSigningKey = jwtOptions.SigningKey;
@@ -106,6 +109,10 @@ var jwtSigningKey = Convert.FromBase64String(encodedJwtSigningKey);
 if (jwtSigningKey.Length < 32)
 {
     throw new InvalidOperationException("Jwt:SigningKey must contain at least 256 bits.");
+}
+if (CryptographicOperations.FixedTimeEquals(otpHashingKey, jwtSigningKey))
+{
+    throw new InvalidOperationException("Otp:HashingKey and Jwt:SigningKey must be different keys.");
 }
 
 builder.Services.AddSingleton<IOtpService>(serviceProvider =>
@@ -127,7 +134,28 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = jwtOptions.Audience,
             ValidateLifetime = true,
             RequireExpirationTime = true,
+            RequireSignedTokens = true,
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
             ClockSkew = TimeSpan.FromSeconds(30)
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.Headers["WWW-Authenticate"] = "Bearer";
+                await WriteProblemDetailsAsync(context.Response, new ProblemDetails
+                {
+                    Status = StatusCodes.Status401Unauthorized,
+                    Title = "Authentication is required.",
+                    Extensions =
+                    {
+                        ["code"] = "UNAUTHORIZED",
+                        ["traceId"] = context.HttpContext.TraceIdentifier
+                    }
+                }, context.HttpContext.RequestAborted);
+            }
         };
     });
 builder.Services.AddAuthorization();
@@ -143,14 +171,19 @@ builder.Services.AddRateLimiter(options =>
         }
 
         context.HttpContext.Response.Headers["Cache-Control"] = "no-store";
-        context.HttpContext.Response.ContentType = "application/problem+json";
-        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        await WriteProblemDetailsAsync(context.HttpContext.Response, new ProblemDetails
         {
             Status = StatusCodes.Status429TooManyRequests,
             Title = "Too many requests. Please try again later.",
-            Extensions = { ["code"] = "RATE_LIMITED" }
+            Extensions =
+            {
+                ["code"] = "RATE_LIMITED",
+                ["traceId"] = context.HttpContext.TraceIdentifier
+            }
         }, cancellationToken);
     };
+    options.AddPolicy(AuthenticationRateLimitPolicies.Register, context =>
+        CreateFixedWindowPartition(context, rateLimitOptions.Register));
     options.AddPolicy(AuthenticationRateLimitPolicies.Login, context =>
         CreateFixedWindowPartition(context, rateLimitOptions.Login));
     options.AddPolicy(AuthenticationRateLimitPolicies.VerifyOtp, context =>
@@ -161,11 +194,99 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+    {
+        context.Abort();
+    }
+    catch (Exception exception)
+    {
+        var isRequestTooLarge = exception is BadHttpRequestException badRequestException &&
+            badRequestException.StatusCode == StatusCodes.Status413PayloadTooLarge;
+        var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("GlobalExceptionHandler");
+        if (isRequestTooLarge)
+        {
+            logger.LogWarning(
+                "Request body rejected because it exceeded the configured limit. TraceId: {TraceId}",
+                context.TraceIdentifier);
+        }
+        else
+        {
+            logger.LogError(
+                "Unhandled exception of type {ExceptionType}. TraceId: {TraceId}",
+                exception.GetType().FullName,
+                context.TraceIdentifier);
+        }
+
+        if (context.Response.HasStarted)
+        {
+            context.Abort();
+            return;
+        }
+
+        context.Response.Clear();
+        context.Response.StatusCode = isRequestTooLarge
+            ? StatusCodes.Status413PayloadTooLarge
+            : StatusCodes.Status500InternalServerError;
+        context.Response.Headers["Cache-Control"] = "no-store";
+        context.Response.Headers["Pragma"] = "no-cache";
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        context.Response.Headers["X-Frame-Options"] = "DENY";
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+        context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+
+        await WriteProblemDetailsAsync(context.Response, new ProblemDetails
+        {
+            Status = context.Response.StatusCode,
+            Title = isRequestTooLarge
+                ? "The request body is too large."
+                : "An unexpected error occurred.",
+            Extensions =
+            {
+                ["code"] = isRequestTooLarge ? "REQUEST_TOO_LARGE" : "INTERNAL_ERROR",
+                ["traceId"] = context.TraceIdentifier
+            }
+        }, context.RequestAborted);
+    }
+});
+
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+
+    if (context.Request.Path.StartsWithSegments("/api/auth"))
+    {
+        context.Response.Headers["Cache-Control"] = "no-store";
+        context.Response.Headers["Pragma"] = "no-cache";
+    }
+
+    if (context.Request.Path == "/" || context.Request.Path == "/index.html")
+    {
+        context.Response.Headers["Content-Security-Policy"] =
+            "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'";
+    }
+
+    await next();
+});
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+}
+else
+{
+    app.UseHsts();
 }
 
 app.UseHttpsRedirection();
@@ -174,6 +295,29 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    const long maxAuthenticationRequestBodySize = 16 * 1024;
+    if (HttpMethods.IsPost(context.Request.Method) &&
+        context.Request.Path.StartsWithSegments("/api/auth") &&
+        context.Request.ContentLength is > maxAuthenticationRequestBodySize)
+    {
+        context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+        await WriteProblemDetailsAsync(context.Response, new ProblemDetails
+        {
+            Status = StatusCodes.Status413PayloadTooLarge,
+            Title = "The request body is too large.",
+            Extensions =
+            {
+                ["code"] = "REQUEST_TOO_LARGE",
+                ["traceId"] = context.TraceIdentifier
+            }
+        }, context.RequestAborted);
+        return;
+    }
+
+    await next();
+});
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -194,6 +338,16 @@ static RateLimitPartition<string> CreateFixedWindowPartition(
             QueueLimit = 0,
             AutoReplenishment = true
         });
+
+static Task WriteProblemDetailsAsync(
+    HttpResponse response,
+    ProblemDetails problemDetails,
+    CancellationToken cancellationToken) =>
+    response.WriteAsJsonAsync(
+        problemDetails,
+        options: (JsonSerializerOptions?)null,
+        contentType: "application/problem+json",
+        cancellationToken: cancellationToken);
 
 public partial class Program
 {

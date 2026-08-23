@@ -26,6 +26,7 @@ Các endpoint:
 - Client không được gửi `UserId`, `Purpose`, `AuthenticationFlowId`, `FlowExpiresAt`, `ResendCount`, TTL, attempts hoặc trạng thái challenge.
 - Mọi response lỗi có `traceId`, nhưng không có stack trace, SQL/SMTP detail, tên class hoặc secret.
 - `429 Too Many Requests` trả `Retry-After` khi server xác định được thời gian chờ.
+- Mọi auth POST body tối đa 16 KiB; body vượt giới hạn trả `413 REQUEST_TOO_LARGE` trước model binding/service.
 
 ## 3. Error format
 
@@ -391,13 +392,13 @@ Giá trị khởi đầu đồng bộ với `REQUIREMENTS.md`:
 
 | Endpoint | Giới hạn đề xuất |
 |---|---|
-| Register | Chưa gắn HTTP rate policy trong Phase 9. |
+| Register | Fixed window 5 request/giờ/IP. |
 | Login | Fixed window 5 request/phút/IP. |
 | Verify OTP | Fixed window 10 request/phút/IP, cộng hard limit 5 OTP sai/challenge. |
 | Resend OTP | Fixed window 3 request/5 phút/IP, cộng cooldown 60 giây. |
 | Phát OTP chung | Quota theo User qua login/resend là mục tiêu phase sau, chưa hiện thực. |
 
-Middleware Phase 9 chỉ áp dụng fixed-window quota theo IP/endpoint, dùng `HttpContext.Connection.RemoteIpAddress` và fallback `unknown` khi IP null; middleware không đọc/log body password hoặc OTP và không tin `X-Forwarded-For` khi chưa có trusted proxy. Quota theo normalized email/challenge/User và quota phát OTP chung là thiết kế cho phase sau.
+Middleware sau Phase 13 áp dụng fixed-window quota theo IP/endpoint, dùng `HttpContext.Connection.RemoteIpAddress` và fallback `unknown` khi IP null; middleware không đọc/log body password hoặc OTP và không tin `X-Forwarded-For` khi chưa có trusted proxy. Quota theo normalized email/challenge/User và quota phát OTP dùng chung vẫn chưa được hiện thực.
 
 Ví dụ response rate limit:
 
