@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi
 
-Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. `POST /api/auth/verify-otp`, JWT, `GET /api/auth/me` và `POST /api/auth/resend-otp` đã được hiện thực đến Phase 8. Rate limiting đầy đủ và audit đầy đủ vẫn thuộc các Phase 9 và 10; các quy tắc tương ứng bên dưới là contract mục tiêu, không phải xác nhận chúng đã được hiện thực.
+Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. `POST /api/auth/verify-otp`, JWT, `GET /api/auth/me`, `POST /api/auth/resend-otp` và rate limit HTTP theo IP cho ba endpoint nhạy cảm đã được hiện thực đến Phase 9. Audit đầy đủ vẫn thuộc Phase 10; quota theo User/email trong các phần thiết kế bên dưới là contract mục tiêu, không phải xác nhận đã được hiện thực.
 
 Các endpoint:
 
@@ -391,13 +391,13 @@ Giá trị khởi đầu đồng bộ với `REQUIREMENTS.md`:
 
 | Endpoint | Giới hạn đề xuất |
 |---|---|
-| Register | 5 request/giờ/IP. |
-| Login | 5 request/phút/IP và 10 request/15 phút/normalized email. |
-| Verify OTP | 10 request/phút/IP, cộng hard limit 5 OTP sai/challenge. |
-| Resend OTP | Cooldown 60 giây; 5 request/15 phút/IP và 3 request/15 phút/User. |
-| Phát OTP chung | Tổng 5 OTP/15 phút/User qua cả login thành công và resend. |
+| Register | Chưa gắn HTTP rate policy trong Phase 9. |
+| Login | Fixed window 5 request/phút/IP. |
+| Verify OTP | Fixed window 10 request/phút/IP, cộng hard limit 5 OTP sai/challenge. |
+| Resend OTP | Fixed window 3 request/5 phút/IP, cộng cooldown 60 giây. |
+| Phát OTP chung | Quota theo User qua login/resend là mục tiêu phase sau, chưa hiện thực. |
 
-Middleware chỉ áp dụng quota IP/endpoint và request-size. Quota theo normalized email/challenge/User chạy trong service sau validation/lookup, không để middleware đọc/log body password hoặc OTP. Password login thành công cũng là một lần phát OTP, vì vậy quota chung ngăn né resend limiter bằng cách gọi lại login liên tục.
+Middleware Phase 9 chỉ áp dụng fixed-window quota theo IP/endpoint, dùng `HttpContext.Connection.RemoteIpAddress` và fallback `unknown` khi IP null; middleware không đọc/log body password hoặc OTP và không tin `X-Forwarded-For` khi chưa có trusted proxy. Quota theo normalized email/challenge/User và quota phát OTP chung là thiết kế cho phase sau.
 
 Ví dụ response rate limit:
 

@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using OTPAuth.API.DTOs;
+using OTPAuth.API.Configuration;
 using OTPAuth.API.Services;
 
 namespace OTPAuth.API.Controllers;
@@ -47,8 +49,10 @@ public class AuthController(IAuthService authService) : ControllerBase
         };
 
     [HttpPost("login")]
+    [EnableRateLimiting(AuthenticationRateLimitPolicies.Login)]
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
@@ -81,8 +85,10 @@ public class AuthController(IAuthService authService) : ControllerBase
     }
 
     [HttpPost("verify-otp")]
+    [EnableRateLimiting(AuthenticationRateLimitPolicies.VerifyOtp)]
     [ProducesResponseType(typeof(VerifyOtpResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<VerifyOtpResponse>> VerifyOtp(
@@ -108,6 +114,7 @@ public class AuthController(IAuthService authService) : ControllerBase
     }
 
     [HttpPost("resend-otp")]
+    [EnableRateLimiting(AuthenticationRateLimitPolicies.ResendOtp)]
     [ProducesResponseType(typeof(ResendOtpResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]

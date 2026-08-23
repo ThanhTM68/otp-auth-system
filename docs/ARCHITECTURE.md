@@ -125,7 +125,7 @@ Thứ tự logic đề xuất:
 7. Model binding/DTO validation.
 8. Controller và Service; tại đây mới áp dụng quota cần normalized email, challenge hoặc User.
 
-`register`, `login`, `verify-otp`, `resend-otp` là anonymous endpoint nhưng vẫn chịu cả hai lớp limit. Middleware không tự đọc body có password/OTP để tạo partition key. `GET /api/auth/me` bắt buộc JWT hợp lệ; một active-user authorization policy lấy UserId từ claim `sub`, đọc User từ database và trả `403` nếu tài khoản đã inactive. Mọi protected endpoint tương lai phải dùng cùng policy để disable User có hiệu lực ngay.
+Hiện thực Phase 9 gắn policy fixed-window độc lập theo IP cho `login` (5/60 giây), `verify-otp` (10/60 giây) và `resend-otp` (3/300 giây). Middleware không tự đọc body có password/OTP để tạo partition key; `register` chưa bị áp policy. Các quota theo User/email trong thiết kế là bước sau. `GET /api/auth/me` bắt buộc JWT hợp lệ; một active-user authorization policy lấy UserId từ claim `sub`, đọc User từ database và trả `403` nếu tài khoản đã inactive. Mọi protected endpoint tương lai phải dùng cùng policy để disable User có hiệu lực ngay.
 
 ## 5. Trust boundary và luồng dữ liệu nhạy cảm
 

@@ -213,6 +213,8 @@ Hiện thực Phase 8 chỉ nhận `challengeId`, lấy User/email/state từ da
 
 Middleware chỉ thực hiện quota thô theo IP/endpoint và giới hạn kích thước request. Quota cần normalized email, challenge hoặc User được thực hiện ở tầng application/service sau validation/lookup; middleware không tự đọc body chứa password/OTP. Khi rate limit/cooldown bị vượt, API trả `429 Too Many Requests` và `Retry-After` khi có thể. Deployment demo một instance có thể dùng bộ đếm trong memory. Nếu triển khai nhiều instance, bộ đếm phân tán là vấn đề cần thiết kế lại; Phase 0 không bổ sung Redis.
 
+Hiện thực Phase 9 dùng middleware chính thức `Microsoft.AspNetCore.RateLimiting` với fixed-window partition theo `HttpContext.Connection.RemoteIpAddress` (fallback `unknown`). Các policy độc lập là login 5 request/60 giây/IP, verify OTP 10 request/60 giây/IP và resend OTP 3 request/300 giây/IP. Khi từ chối, API trả `429`, Problem Details generic `RATE_LIMITED`, `Cache-Control: no-store` và `Retry-After` khi lease cung cấp metadata. `AttemptCount`/`MaxAttempts` và cooldown resend 60 giây vẫn là các lớp kiểm soát độc lập; register và `/api/auth/me` không bị áp policy trong phase này.
+
 ## 11. Đối chiếu SECURITY_REQUIREMENTS.md
 
 | SR | Cách đáp ứng trong thiết kế | Tài liệu chi tiết |

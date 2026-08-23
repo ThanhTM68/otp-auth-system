@@ -119,9 +119,9 @@
 
 ## PHASE 9 - Rate Limiting
 
-- [ ] Login rate limit
-- [ ] OTP verify rate limit
-- [ ] OTP resend rate limit
+- [x] Login rate limit
+- [x] OTP verify rate limit
+- [x] OTP resend rate limit
 
 ---
 

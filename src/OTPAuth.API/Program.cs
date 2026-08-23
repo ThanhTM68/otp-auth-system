@@ -2,9 +2,12 @@ using Microsoft.OpenApi.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using System.Globalization;
+using System.Threading.RateLimiting;
 using OTPAuth.API.Configuration;
 using OTPAuth.API.Data;
 using OTPAuth.API.Entities;
@@ -48,6 +51,14 @@ builder.Services.AddSwaggerGen(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
+
+var rateLimitOptions = builder.Configuration.GetSection(AuthenticationRateLimitOptions.SectionName)
+    .Get<AuthenticationRateLimitOptions>()
+    ?? throw new InvalidOperationException("RateLimiting configuration is required.");
+if (!rateLimitOptions.IsValid())
+{
+    throw new InvalidOperationException("Rate limiting permit limits and windows must be positive.");
+}
 
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(connectionString));
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -118,6 +129,33 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 builder.Services.AddAuthorization();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        }
+
+        context.HttpContext.Response.Headers["Cache-Control"] = "no-store";
+        context.HttpContext.Response.ContentType = "application/problem+json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = "Too many requests. Please try again later.",
+            Extensions = { ["code"] = "RATE_LIMITED" }
+        }, cancellationToken);
+    };
+    options.AddPolicy(AuthenticationRateLimitPolicies.Login, context =>
+        CreateFixedWindowPartition(context, rateLimitOptions.Login));
+    options.AddPolicy(AuthenticationRateLimitPolicies.VerifyOtp, context =>
+        CreateFixedWindowPartition(context, rateLimitOptions.VerifyOtp));
+    options.AddPolicy(AuthenticationRateLimitPolicies.ResendOtp, context =>
+        CreateFixedWindowPartition(context, rateLimitOptions.ResendOtp));
+});
 
 var app = builder.Build();
 
@@ -130,12 +168,27 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
 
 app.Run();
+
+static RateLimitPartition<string> CreateFixedWindowPartition(
+    HttpContext context,
+    AuthenticationRateLimitPolicyOptions policy) =>
+    RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = policy.PermitLimit,
+            Window = TimeSpan.FromSeconds(policy.WindowSeconds),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 0,
+            AutoReplenishment = true
+        });
 
 public partial class Program
 {
