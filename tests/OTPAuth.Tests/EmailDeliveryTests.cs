@@ -163,6 +163,34 @@ public class EmailDeliveryTests
         Assert.DoesNotContain("004821", diagnostic, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task EmailService_RejectsInvalidGmailAppPasswordBeforeConnecting()
+    {
+        var logger = new CapturingLogger<EmailService>();
+        var emailService = new EmailService(
+            Options.Create(new EmailOptions
+            {
+                Host = "smtp.gmail.com",
+                Port = 587,
+                Username = "sender@gmail.com",
+                Password = "not-a-16-character-app-password",
+                FromEmail = "sender@gmail.com",
+                EnableSsl = true
+            }),
+            logger);
+
+        await Assert.ThrowsAsync<EmailDeliveryException>(() => emailService.SendOtpAsync(
+            new OtpEmailMessage(
+                "student@example.com",
+                "004821",
+                DateTimeOffset.UtcNow.AddMinutes(3))));
+
+        var diagnostic = Assert.Single(logger.Messages);
+        Assert.Contains("Password", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("not-a-16-character-app-password", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("004821", diagnostic, StringComparison.Ordinal);
+    }
+
     private static AppDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()

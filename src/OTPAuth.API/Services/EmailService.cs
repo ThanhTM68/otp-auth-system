@@ -29,6 +29,7 @@ public sealed class EmailService(
     private const string OtpEmailSubject = "Mã xác thực đăng nhập OTP";
 
     private readonly EmailOptions options = emailOptions.Value;
+    private readonly string smtpPassword = NormalizeAppPassword(emailOptions.Value.Password);
 
     public async Task SendOtpAsync(OtpEmailMessage message, CancellationToken cancellationToken = default)
     {
@@ -54,7 +55,7 @@ public sealed class EmailService(
 
             using var smtpClient = new SmtpClient();
             await smtpClient.ConnectAsync(options.Host, options.Port, SecureSocketOptions.StartTls, cancellationToken);
-            await smtpClient.AuthenticateAsync(options.Username, options.Password, cancellationToken);
+            await smtpClient.AuthenticateAsync(options.Username.Trim(), smtpPassword, cancellationToken);
             await smtpClient.SendAsync(email, cancellationToken);
             await smtpClient.DisconnectAsync(true, cancellationToken);
 
@@ -122,7 +123,7 @@ public sealed class EmailService(
         {
             issues.Add(nameof(EmailOptions.Username));
         }
-        if (string.IsNullOrWhiteSpace(options.Password))
+        if (smtpPassword.Length != 16)
         {
             issues.Add(nameof(EmailOptions.Password));
         }
@@ -137,6 +138,9 @@ public sealed class EmailService(
 
         return issues;
     }
+
+    private static string NormalizeAppPassword(string password) =>
+        string.Concat(password.Where(character => !char.IsWhiteSpace(character)));
 
     private void LogSmtpFailure(string category, Exception exception, string recipientEmail) =>
         logger.LogWarning(
