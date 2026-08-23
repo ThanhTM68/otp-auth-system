@@ -49,7 +49,7 @@ public class OtpServiceTests
     public void CreateLoginChallenge_InitializesSecureLifecycleState()
     {
         var service = CreateService();
-        var challenge = service.CreateLoginChallenge(CreateUser(), FixedNow);
+        var challenge = service.CreateLoginChallenge(CreateUser(), FixedNow).Challenge;
 
         Assert.Equal("LOGIN", challenge.Purpose);
         Assert.Equal(FixedNow, challenge.CreatedAt);

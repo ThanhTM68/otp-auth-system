@@ -26,6 +26,7 @@ public enum LoginStatus
 {
     Success,
     InvalidCredentials,
+    EmailDeliveryFailure,
     PersistenceFailure
 }
 
@@ -35,7 +36,8 @@ public class AuthService(
     AppDbContext dbContext,
     IPasswordHasher<User> passwordHasher,
     TimeProvider timeProvider,
-    IOtpService otpService) : IAuthService
+    IOtpService otpService,
+    IEmailService emailService) : IAuthService
 {
     private readonly string dummyPasswordHash = passwordHasher.HashPassword(
         new User(),
@@ -119,7 +121,8 @@ public class AuthService(
             otpService.RevokeChallenge(openChallenge);
         }
 
-        var challenge = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
+        var creation = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
+        var challenge = creation.Challenge;
         dbContext.OtpChallenges.Add(challenge);
 
         try
@@ -129,6 +132,28 @@ public class AuthService(
         catch (DbUpdateException)
         {
             return new LoginResult(LoginStatus.PersistenceFailure);
+        }
+
+        try
+        {
+            await emailService.SendOtpAsync(
+                new OtpEmailMessage(user.Email, creation.Otp, challenge.ExpiresAt),
+                cancellationToken);
+        }
+        catch (EmailDeliveryException)
+        {
+            otpService.RevokeChallenge(challenge);
+
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException)
+            {
+                return new LoginResult(LoginStatus.PersistenceFailure);
+            }
+
+            return new LoginResult(LoginStatus.EmailDeliveryFailure);
         }
 
         return new LoginResult(

@@ -127,6 +127,8 @@ Một lần login password thành công mới sẽ revoke login challenge trư�
 7. OTP plaintext chỉ tồn tại tạm thời trong memory đủ để tạo email, sau đó không được giữ lại, lưu database, log, audit hoặc trả qua API.
 8. Gửi email qua kết nối SMTP bảo mật. Email nêu hạn thực tế từ `ExpiresAt` (tối đa 3 phút), không hard-code luôn là 3 phút. Nếu gửi thất bại/timeout, server trả lỗi tạm thời, ghi `OTP_DELIVERY_FAILED` đã sanitize và thực hiện transaction bù để revoke challenge mới. Transaction bù là best-effort vì SQL Server và SMTP không có distributed transaction; nếu process/compensation lỗi, challenge còn lại vẫn bị giới hạn bởi TTL, flow expiry, attempts và rate limit.
 
+Hiện thực Phase 6 persist `OtpHash` trước, sau đó chuyển OTP plaintext tạm thời từ `OtpService` sang `IEmailService` để gửi SMTP TLS. OTP không đi vào entity, audit log, application log hoặc response API; khi delivery fail, challenge vừa tạo được revoke và login trả lỗi generic.
+
 ### 7.4. OTP Verification Flow
 
 1. Middleware rate limit thô theo IP; server validate `challengeId` và OTP đúng 6 chữ số.

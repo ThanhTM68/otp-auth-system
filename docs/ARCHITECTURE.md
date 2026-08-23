@@ -85,7 +85,7 @@ Các service chuyên trách chỉ tách những chức năng có ý nghĩa bảo
 - Tập trung lifecycle `IsExpired`, `IsUsable`, increment attempt, revoke và state single-use; việc persist atomic/concurrency sẽ được thêm ở Phase 7.
 - Nhận `OtpOptions` cho độ dài, TTL, flow TTL và giới hạn attempts; bản demo validate cố định 6 chữ số, 3 phút, 10 phút và tối đa 5 attempts.
 - Nhận `Otp:HashingKey` tối thiểu 256 bit từ User Secrets/environment, không từ source code; payload HMAC có encoding có độ dài rõ ràng cho `AuthenticationFlowId`, `ChallengeId`, `UserId`, `Purpose` và OTP.
-- Không lưu hoặc log OTP plaintext. OTP chỉ sống tạm trong stack/memory để tạo HMAC; Phase 6 mới chuyển mã tạm thời tới Email Service.
+- Không lưu hoặc log OTP plaintext. Khi login, mã chỉ sống tạm trong `OtpChallengeCreation` để chuyển một lần sang `IEmailService` sau khi `OtpHash` đã được persist.
 
 ### 3.6. JwtTokenService
 
@@ -97,9 +97,11 @@ Các service chuyên trách chỉ tách những chức năng có ý nghĩa bảo
 
 ### 3.7. Email Service
 
+- `IEmailService`/`EmailService` dùng MailKit và `EmailOptions`; mỗi lần gửi tạo SMTP client riêng, dùng STARTTLS và các thao tác async.
 - Chỉ nhận địa chỉ email lấy từ User trong database và OTP tạm thời từ AuthService.
 - Gửi qua SMTP có TLS; SMTP credential lấy từ configuration an toàn.
 - Template email chỉ nêu OTP, thời hạn thực tế tính từ `ExpiresAt` (tối đa 3 phút) và cảnh báo không chia sẻ mã.
+- AuthService persist challenge trước khi gọi EmailService. Delivery failure được sanitize, challenge mới bị revoke và client nhận `503 OTP_DELIVERY_UNAVAILABLE`; không trả success giả.
 - Không log subject/body chứa OTP và không bật SMTP protocol trace trong production.
 - Không giữ SQL transaction trong khi gọi SMTP.
 

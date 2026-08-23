@@ -82,10 +82,11 @@
 
 ## PHASE 6 - Email OTP
 
-- [ ] EmailService
-- [ ] SMTP Configuration
-- [ ] Email template
-- [ ] Không log OTP
+- [x] EmailService
+- [x] SMTP Configuration
+- [x] Email template
+- [x] Không log OTP
+- [x] Login email integration
 - [ ] Development safe mode nếu cần
 
 ---

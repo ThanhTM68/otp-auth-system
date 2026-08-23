@@ -51,6 +51,7 @@ builder.Services.AddOptions<OtpOptions>()
         options.MaxAttempts is >= 1 and <= 5,
         "OTP options must use 6 digits, 3-minute TTL, 10-minute flow TTL, and 1-5 attempts.")
     .ValidateOnStart();
+builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection(EmailOptions.SectionName));
 
 var encodedOtpHashingKey = builder.Configuration["Otp:HashingKey"]
     ?? throw new InvalidOperationException("Otp:HashingKey is required.");
@@ -62,6 +63,7 @@ if (otpHashingKey.Length < 32)
 
 builder.Services.AddSingleton<IOtpService>(serviceProvider =>
     new OtpService(serviceProvider.GetRequiredService<IOptions<OtpOptions>>(), otpHashingKey));
+builder.Services.AddScoped<IEmailService, EmailService>();
 
 var app = builder.Build();
 

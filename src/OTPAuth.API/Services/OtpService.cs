@@ -6,12 +6,14 @@ using OTPAuth.API.Entities;
 
 namespace OTPAuth.API.Services;
 
+public sealed record OtpChallengeCreation(OtpChallenge Challenge, string Otp);
+
 public interface IOtpService
 {
     string GenerateOtp();
     byte[] HashOtp(OtpChallenge challenge, string otp);
     bool VerifyOtp(OtpChallenge challenge, string otp);
-    OtpChallenge CreateLoginChallenge(User user, DateTimeOffset createdAt);
+    OtpChallengeCreation CreateLoginChallenge(User user, DateTimeOffset createdAt);
     bool IsExpired(OtpChallenge challenge, DateTimeOffset now);
     bool CanAttempt(OtpChallenge challenge);
     bool IsUsable(OtpChallenge challenge, DateTimeOffset now);
@@ -55,7 +57,7 @@ public sealed class OtpService : IOtpService
             CryptographicOperations.FixedTimeEquals(challenge.OtpHash, expectedHash);
     }
 
-    public OtpChallenge CreateLoginChallenge(User user, DateTimeOffset createdAt)
+    public OtpChallengeCreation CreateLoginChallenge(User user, DateTimeOffset createdAt)
     {
         var flowExpiresAt = createdAt.AddMinutes(options.FlowTtlMinutes);
         var expiresAt = Min(createdAt.AddMinutes(options.TtlMinutes), flowExpiresAt);
@@ -77,7 +79,7 @@ public sealed class OtpService : IOtpService
 
         var otp = GenerateOtp();
         challenge.OtpHash = HashOtp(challenge, otp);
-        return challenge;
+        return new OtpChallengeCreation(challenge, otp);
     }
 
     public bool IsExpired(OtpChallenge challenge, DateTimeOffset now) => now >= challenge.ExpiresAt;

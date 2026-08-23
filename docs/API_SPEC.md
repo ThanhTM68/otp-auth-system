@@ -150,8 +150,9 @@ Content-Type: application/json
 2. Tìm User, kiểm tra `IsActive`, verify `PasswordHash`; email không tồn tại dùng dummy hash để giảm timing leak.
 3. Nếu thất bại, ghi `LOGIN_PASSWORD_FAILED`, không tạo challenge và trả cùng một lỗi chung.
 4. Nếu đúng, ghi `LOGIN_PASSWORD_SUCCESS` rồi kiểm tra quota phát OTP chung theo User. Quota này tính cả login và resend; vượt quota trả `429` mà không tạo email/challenge.
-5. Revoke login challenge cũ, bắt đầu authentication flow 10 phút, tạo OTP/challenge mới với TTL tối đa 3 phút, `ResendCount = 0`, `MaxAttempts = 5`, ghi `OTP_CREATED`, rồi gửi OTP tới email trong database.
-6. Không tạo hoặc trả JWT. Trước success response phải kiểm tra lại challenge chưa hết OTP/flow lifetime.
+5. Revoke login challenge cũ, bắt đầu authentication flow 10 phút, tạo OTP/challenge mới với TTL tối đa 3 phút, `ResendCount = 0`, `MaxAttempts = 5` và persist `OtpHash`.
+6. Gửi OTP plaintext tạm thời tới email trong database qua SMTP TLS. Nếu delivery fail, revoke challenge mới và trả `503 OTP_DELIVERY_UNAVAILABLE` đã sanitize.
+7. Không tạo hoặc trả JWT. Chỉ khi email gửi thành công mới trả challenge metadata.
 
 ### Response thành công - `200 OK`
 

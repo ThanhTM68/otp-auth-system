@@ -47,6 +47,7 @@ public class AuthController(IAuthService authService) : ControllerBase
     [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<LoginResponse>> Login(
         LoginRequest request,
@@ -61,6 +62,12 @@ public class AuthController(IAuthService authService) : ControllerBase
                 StatusCodes.Status401Unauthorized,
                 "Thông tin đăng nhập không hợp lệ.",
                 "INVALID_CREDENTIALS")),
+            LoginStatus.EmailDeliveryFailure => StatusCode(
+                StatusCodes.Status503ServiceUnavailable,
+                CreateProblem(
+                    StatusCodes.Status503ServiceUnavailable,
+                    "Không thể gửi mã xác thực. Vui lòng thử lại sau.",
+                    "OTP_DELIVERY_UNAVAILABLE")),
             _ => StatusCode(
                 StatusCodes.Status500InternalServerError,
                 CreateProblem(
