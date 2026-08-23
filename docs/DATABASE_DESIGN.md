@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi và quy ước
 
-Database đề xuất là SQL Server, truy cập qua Entity Framework Core. Phase 0 chỉ thiết kế schema; chưa tạo entity, `DbContext`, migration hoặc database.
+Database dùng SQL Server, truy cập qua Entity Framework Core. Schema `Users`, `OtpChallenges`, `AuditLogs` đã được tạo bằng migration Phase 2; Phase 10 dùng nguyên `AuditLogs` schema nên không cần migration mới.
 
 Quy ước chung:
 
@@ -238,9 +238,9 @@ Không thêm cột `Details`, `Message` hoặc JSON tự do ở thiết kế ban
 | `OTP_VERIFY_FAILED` | `false` | OTP không khớp hoặc challenge bị replay/revoke/lock/not found; expired dùng event riêng. |
 | `OTP_EXPIRED` | `false` | Verify challenge tại/sau `ExpiresAt`. |
 | `OTP_VERIFY_SUCCESS` | `true` | `ConsumedAt` được commit thành công. |
-| `OTP_RESEND` | `true` | Challenge cũ được revoke và challenge mới được tạo. |
+| `OTP_RESEND_SUCCESS` | `true` | Challenge mới đã gửi email thành công. |
 
-Policy bổ sung đã chốt: lần sai thứ 5 ghi thêm `OTP_MAX_ATTEMPTS`; SMTP failure ghi `OTP_DELIVERY_FAILED`; JWT được cấp ghi `AUTHENTICATION_SUCCESS`. `OTP_EXPIRED` được ghi một lần cho lần verify expired và không ghi thêm `OTP_VERIFY_FAILED` cho cùng request. `OTP_REVOKED`/`RATE_LIMITED` có thể được ghi theo policy chống log flood. Event/reason code phải là hằng số nội bộ, không lấy trực tiếp từ dữ liệu client.
+Policy hiện thực: lần sai thứ 5 ghi thêm `OTP_MAX_ATTEMPTS_REACHED`; SMTP failure ghi `OTP_DELIVERY_FAILED`; JWT được cấp ghi `JWT_ISSUED`; OTP đã consume ghi `OTP_REPLAY_REJECTED`; resend không thành công ghi `OTP_RESEND_FAILED` với reason code allowlist. `OTP_EXPIRED` được ghi một lần cho lần verify expired và không ghi thêm `OTP_VERIFY_FAILED` cho cùng request. Event/reason code là hằng số nội bộ, không lấy trực tiếp từ dữ liệu client.
 
 Khi client gửi một challenge ID không tồn tại, audit dùng `ReasonCode = CHALLENGE_NOT_FOUND` nhưng để `OtpChallengeId = NULL`; không sao chép identifier tùy ý từ request vào AuditLog.
 
@@ -280,7 +280,7 @@ Trong transaction ngắn:
 2. Kiểm tra cooldown/rate-limit dựa trên server state.
 3. Revoke challenge cũ.
 4. Insert challenge mới với OTP HMAC hoàn toàn mới; copy `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, và cắt `ExpiresAt` tại flow expiry.
-5. Insert `OTP_RESEND` và `OTP_CREATED`.
+5. Sau delivery thành công, ghi `OTP_RESEND_SUCCESS` và `OTP_CREATED`; nếu delivery fail thì ghi `OTP_RESEND_FAILED` với mã lý do an toàn.
 6. Commit rồi gửi SMTP; sau SMTP, recheck `now < ExpiresAt`, `now < FlowExpiresAt` và challenge vẫn open trước response `200`.
 
 `Serializable` cho đoạn revoke/insert ngắn, `RowVersion` và filtered unique index tạo ba lớp bảo vệ dễ giải thích cho bản demo. Unique/concurrency exception phải được ánh xạ sang lỗi an toàn, không trả SQL detail.

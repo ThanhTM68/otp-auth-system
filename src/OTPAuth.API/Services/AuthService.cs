@@ -64,7 +64,8 @@ public class AuthService(
     TimeProvider timeProvider,
     IOtpService otpService,
     IEmailService emailService,
-    IJwtTokenService jwtTokenService) : IAuthService
+    IJwtTokenService jwtTokenService,
+    IAuditService auditService) : IAuthService
 {
     private readonly string dummyPasswordHash = passwordHasher.HashPassword(
         new User(),
@@ -93,13 +94,7 @@ public class AuthService(
 
         user.PasswordHash = passwordHasher.HashPassword(user, request.Password!);
         dbContext.Users.Add(user);
-        dbContext.AuditLogs.Add(new AuditLog
-        {
-            UserId = user.Id,
-            EventType = "REGISTER_SUCCESS",
-            Success = true,
-            CreatedAt = createdAt
-        });
+        auditService.Record(new AuditEvent(AuditEventTypes.RegisterSuccess, true, UserId: user.Id));
 
         try
         {
@@ -133,6 +128,11 @@ public class AuthService(
 
         if (user is null || !user.IsActive || passwordVerification == PasswordVerificationResult.Failed)
         {
+            await auditService.TryRecordAsync(new AuditEvent(
+                AuditEventTypes.LoginPasswordFailed,
+                false,
+                UserId: user?.Id,
+                ReasonCode: AuditReasonCodes.InvalidCredentials), cancellationToken);
             return new LoginResult(LoginStatus.InvalidCredentials);
         }
 
@@ -151,6 +151,8 @@ public class AuthService(
         var creation = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
         var challenge = creation.Challenge;
         dbContext.OtpChallenges.Add(challenge);
+        auditService.Record(new AuditEvent(AuditEventTypes.LoginPasswordSuccess, true, UserId: user.Id));
+        auditService.Record(new AuditEvent(AuditEventTypes.OtpCreated, true, user.Id, challenge.Id));
 
         try
         {
@@ -170,6 +172,12 @@ public class AuthService(
         catch (EmailDeliveryException)
         {
             otpService.RevokeChallenge(challenge);
+            auditService.Record(new AuditEvent(
+                AuditEventTypes.OtpDeliveryFailed,
+                false,
+                user.Id,
+                challenge.Id,
+                AuditReasonCodes.DeliveryFailed));
 
             try
             {
@@ -207,15 +215,87 @@ public class AuthService(
                 .Include(candidate => candidate.User)
                 .SingleOrDefaultAsync(candidate => candidate.Id == request.ChallengeId, cancellationToken);
 
-            if (challenge is null || challenge.User is null || !challenge.User.IsActive ||
-                challenge.Purpose != "LOGIN" || !otpService.IsUsable(challenge, now))
+            if (challenge is null)
             {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    ReasonCode: AuditReasonCodes.ChallengeNotFound), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+            }
+
+            if (challenge.User is null || !challenge.User.IsActive)
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    AuditReasonCodes.UserInactive), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+            }
+
+            if (challenge.Purpose != "LOGIN")
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    AuditReasonCodes.WrongPurpose), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+            }
+
+            if (challenge.ConsumedAt is not null)
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpReplayRejected,
+                    false,
+                    challenge.UserId,
+                    challenge.Id), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+            }
+
+            if (now >= challenge.ExpiresAt || now >= challenge.FlowExpiresAt)
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpExpired,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    now >= challenge.FlowExpiresAt ? AuditReasonCodes.FlowExpired : AuditReasonCodes.OtpExpired), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+            }
+
+            if (challenge.IsRevoked || !otpService.CanAttempt(challenge))
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    challenge.IsRevoked ? AuditReasonCodes.ChallengeRevoked : AuditReasonCodes.ChallengeLocked), cancellationToken);
                 return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
             }
 
             if (!otpService.VerifyOtp(challenge, request.Otp!))
             {
                 otpService.TryRecordFailedAttempt(challenge, now);
+                auditService.Record(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    AuditReasonCodes.OtpMismatch));
+                if (!otpService.CanAttempt(challenge))
+                {
+                    auditService.Record(new AuditEvent(
+                        AuditEventTypes.OtpMaxAttemptsReached,
+                        false,
+                        challenge.UserId,
+                        challenge.Id,
+                        AuditReasonCodes.ChallengeLocked));
+                }
 
                 try
                 {
@@ -234,6 +314,11 @@ public class AuthService(
             }
 
             challenge.ConsumedAt = now;
+            auditService.Record(new AuditEvent(
+                AuditEventTypes.OtpVerifySuccess,
+                true,
+                challenge.UserId,
+                challenge.Id));
 
             try
             {
@@ -250,6 +335,11 @@ public class AuthService(
             }
 
             var token = jwtTokenService.CreateToken(challenge.User, now);
+            await auditService.TryRecordAsync(new AuditEvent(
+                AuditEventTypes.JwtIssued,
+                true,
+                challenge.UserId,
+                challenge.Id), cancellationToken);
             return new VerifyOtpResult(
                 VerifyOtpStatus.Success,
                 new VerifyOtpResponse(token.AccessToken, token.TokenType, token.ExpiresIn, token.ExpiresAt));
@@ -276,6 +366,12 @@ public class AuthService(
                 previousChallenge.ConsumedAt is not null || !otpService.CanAttempt(previousChallenge) ||
                 now >= previousChallenge.FlowExpiresAt)
             {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpResendFailed,
+                    false,
+                    previousChallenge?.UserId,
+                    previousChallenge?.Id,
+                    AuditReasonCodes.ResendNotAvailable), cancellationToken);
                 return new ResendOtpResult(ResendOtpStatus.NotAvailable);
             }
 
@@ -283,11 +379,23 @@ public class AuthService(
             if (now < resendAvailableAt)
             {
                 var retryAfterSeconds = Math.Max(1, (int)Math.Ceiling((resendAvailableAt - now).TotalSeconds));
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpResendFailed,
+                    false,
+                    previousChallenge.UserId,
+                    previousChallenge.Id,
+                    AuditReasonCodes.ResendCooldown), cancellationToken);
                 return new ResendOtpResult(ResendOtpStatus.Cooldown, RetryAfterSeconds: retryAfterSeconds);
             }
 
             if (!otpService.CanResend(previousChallenge, now))
             {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpResendFailed,
+                    false,
+                    previousChallenge.UserId,
+                    previousChallenge.Id,
+                    AuditReasonCodes.ResendNotAvailable), cancellationToken);
                 return new ResendOtpResult(ResendOtpStatus.NotAvailable);
             }
 
@@ -329,6 +437,12 @@ public class AuthService(
             catch (EmailDeliveryException)
             {
                 var revoked = await RevokeAfterFailedDeliveryAsync(creation.Challenge.Id, cancellationToken);
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpResendFailed,
+                    false,
+                    creation.Challenge.UserId,
+                    creation.Challenge.Id,
+                    AuditReasonCodes.DeliveryFailed), cancellationToken);
                 return new ResendOtpResult(
                     revoked ? ResendOtpStatus.EmailDeliveryFailure : ResendOtpStatus.PersistenceFailure);
             }
@@ -336,9 +450,26 @@ public class AuthService(
             if (!await IsChallengeUsableAfterDeliveryAsync(creation.Challenge.Id, cancellationToken))
             {
                 var revoked = await RevokeAfterFailedDeliveryAsync(creation.Challenge.Id, cancellationToken);
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpResendFailed,
+                    false,
+                    creation.Challenge.UserId,
+                    creation.Challenge.Id,
+                    AuditReasonCodes.DeliveryFailed), cancellationToken);
                 return new ResendOtpResult(
                     revoked ? ResendOtpStatus.EmailDeliveryFailure : ResendOtpStatus.PersistenceFailure);
             }
+
+            await auditService.TryRecordAsync(new AuditEvent(
+                AuditEventTypes.OtpResendSuccess,
+                true,
+                creation.Challenge.UserId,
+                creation.Challenge.Id), cancellationToken);
+            await auditService.TryRecordAsync(new AuditEvent(
+                AuditEventTypes.OtpCreated,
+                true,
+                creation.Challenge.UserId,
+                creation.Challenge.Id), cancellationToken);
 
             return new ResendOtpResult(
                 ResendOtpStatus.Success,

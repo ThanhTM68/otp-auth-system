@@ -180,7 +180,8 @@ public class OtpVerificationTests
             new FixedTimeProvider(FixedNow),
             otpService,
             new FakeEmailService(),
-            new JwtTokenService(CreateJwtOptions(), JwtSigningKey));
+            new JwtTokenService(CreateJwtOptions(), JwtSigningKey),
+            new FakeAuditService(context));
 
     private static OtpService CreateOtpService() =>
         new(Microsoft.Extensions.Options.Options.Create(new OtpOptions()), OtpHashingKey);

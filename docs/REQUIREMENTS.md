@@ -143,14 +143,14 @@ Hiện thực Phase 6 persist `OtpHash` trước, sau đó chuyển OTP plaintex
 
 Client nhận thông báo chung cho OTP/challenge sai, hết hạn, đã dùng, đã revoke hoặc bị khóa. Lý do chi tiết chỉ xuất hiện dưới dạng reason code đã sanitize trong audit log.
 
-Hiện thực Phase 7 dùng DTO allowlist (`challengeId`, `otp` đúng 6 chữ số), HMAC fixed-time, UTC server time và `RowVersion` của EF Core. Khi OTP sai, thay đổi `AttemptCount` (và revoke ở lần sai thứ 5) phải persist thành công trước khi trả lỗi; khi OTP đúng, `ConsumedAt` phải persist thành công trước khi JWT được tạo. Một conflict concurrency sẽ reload state và thử lại tối đa 3 lần, sau đó fail closed với phản hồi verify chung. Audit chi tiết và endpoint rate limiting vẫn chưa được hiện thực trong phase này.
+Hiện thực dùng DTO allowlist (`challengeId`, `otp` đúng 6 chữ số), HMAC fixed-time, UTC server time và `RowVersion` của EF Core. Khi OTP sai, thay đổi `AttemptCount` (và revoke ở lần sai thứ 5) phải persist thành công trước khi trả lỗi; khi OTP đúng, `ConsumedAt` phải persist thành công trước khi JWT được tạo. Một conflict concurrency sẽ reload state và thử lại tối đa 3 lần, sau đó fail closed với phản hồi verify chung. Phase 10 ghi event allowlist qua `IAuditService`; state audit quan trọng đi cùng transaction khi có thể, còn audit sau JWT/SMTP là best-effort và không chứa secret.
 
 ### 7.5. Resend OTP Flow
 
 1. Client gửi `challengeId`; không gửi email hoặc UserId làm căn cứ xác định người nhận. Middleware áp dụng quota thô theo IP.
 2. Server validate, tải challenge/User, áp dụng quota theo User và kiểm tra cooldown 60 giây từ lần tạo/gửi gần nhất.
 3. Chỉ open challenge `LOGIN` hiện tại, chưa consumed/revoke/khóa, `now < FlowExpiresAt` và `ResendCount < 3` mới được resend. Challenge OTP đã hết TTL vẫn có thể resend nếu authentication flow chưa hết hạn và còn lượt.
-4. Trong một transaction ngắn, server revoke challenge cũ, tạo OTP/challenge hoàn toàn mới, giữ nguyên `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount` và ghi `OTP_RESEND` cùng `OTP_CREATED`.
+4. Trong một transaction ngắn, server revoke challenge cũ, tạo OTP/challenge hoàn toàn mới, giữ nguyên `AuthenticationFlowId`/`FlowExpiresAt` và tăng `ResendCount`. Sau khi SMTP delivery thành công, ghi `OTP_RESEND_SUCCESS` cùng `OTP_CREATED`.
 5. Challenge mới có `ExpiresAt = min(CreatedAt + 3 phút, FlowExpiresAt)`. OTP được gửi tới email trong database; sau SMTP, server recheck challenge vẫn usable trước khi response `200 OK` trả `challengeId`, `expiresAt`, `flowExpiresAt`, `resendAvailableAt` mới.
 6. Client phải thay ID cũ bằng ID mới. Mã cũ luôn bị từ chối, kể cả khi chưa hết TTL.
 7. Hai request resend đồng thời phải được bảo vệ bằng transaction/concurrency token để tối đa một challenge mới còn active.

@@ -315,11 +315,11 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 ## 9. Logging và audit
 
 - Application log chỉ chứa thông tin vận hành tối thiểu như trace ID, event code và thời lượng.
-- Audit log chứa event bảo mật dạng cấu trúc. Các event tối thiểu: `REGISTER_SUCCESS`, `LOGIN_PASSWORD_SUCCESS`, `LOGIN_PASSWORD_FAILED`, `OTP_CREATED`, `OTP_VERIFY_FAILED`, `OTP_EXPIRED`, `OTP_VERIFY_SUCCESS`, `OTP_RESEND`.
-- Policy bắt buộc bổ sung: lần sai thứ 5 ghi `OTP_MAX_ATTEMPTS`, SMTP failure ghi `OTP_DELIVERY_FAILED`, cấp JWT ghi `AUTHENTICATION_SUCCESS`. Verify expired chỉ ghi `OTP_EXPIRED`, không ghi đúp `OTP_VERIFY_FAILED` cho cùng request.
-- `OTP_REVOKED` và `RATE_LIMITED` có thể được audit theo policy dedup/sampling để không tạo log flood.
+- Audit log chứa event bảo mật dạng cấu trúc, do `IAuditService` trung tâm tạo từ `AuthService`, không phải controller. Event đã có: `REGISTER_SUCCESS`, `LOGIN_PASSWORD_SUCCESS`, `LOGIN_PASSWORD_FAILED`, `OTP_CREATED`, `OTP_DELIVERY_FAILED`, `OTP_VERIFY_FAILED`, `OTP_EXPIRED`, `OTP_REPLAY_REJECTED`, `OTP_MAX_ATTEMPTS_REACHED`, `OTP_VERIFY_SUCCESS`, `JWT_ISSUED`, `OTP_RESEND_SUCCESS`, `OTP_RESEND_FAILED`.
+- Thay đổi state quan trọng (register, tạo challenge login, verify sai/consume OTP) ghi audit cùng `SaveChanges` khi có thể. Các event sau SMTP/JWT dùng best-effort; nếu ghi audit thất bại, chỉ log mã event an toàn và không làm thay đổi kết quả xác thực đã commit.
+- Rate limit không ghi audit theo từng request để tránh log flood.
 - Cấm ghi password, PasswordHash, OTP, OtpHash, JWT, Authorization header, SMTP/DB/JWT/HMAC secrets hoặc raw request body.
-- IP là dữ liệu cá nhân; cần phân quyền đọc và chốt retention ở phase vận hành. Không lưu User-Agent thô trong AuditLog vì đây là input tùy ý từ client.
+- IP là dữ liệu cá nhân; cần phân quyền đọc và chốt retention ở phase vận hành. `IAuditService` chỉ lấy IP từ `RemoteIpAddress`, User-Agent từ header nhưng cắt tối đa 256 ký tự và correlation ID server tối đa 64; không tin header forwarding khi chưa cấu hình trusted proxy.
 
 ## 10. Configuration và secrets
 

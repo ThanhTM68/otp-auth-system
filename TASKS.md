@@ -127,24 +127,24 @@
 
 ## PHASE 10 - Audit Logging
 
-- [ ] Authentication audit
-- [ ] OTP audit
-- [ ] Login failed audit
-- [ ] Verify failed audit
-- [ ] Không lưu secret/OTP/password
+- [x] Authentication audit
+- [x] OTP audit
+- [x] Login failed audit
+- [x] Verify failed audit
+- [x] Không lưu secret/OTP/password
 
 ---
 
 ## PHASE 11 - Security Tests
 
-- [ ] Wrong OTP
-- [ ] Expired OTP
-- [ ] Replay OTP
-- [ ] Brute force
-- [ ] Max attempts
-- [ ] Old OTP after resend
-- [ ] JWT before OTP
-- [ ] Input validation
+- [x] Wrong OTP
+- [x] Expired OTP
+- [x] Replay OTP
+- [x] Brute force
+- [x] Max attempts
+- [x] Old OTP after resend
+- [x] JWT before OTP
+- [x] Input validation
 
 ---
 

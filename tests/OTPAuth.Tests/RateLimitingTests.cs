@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace OTPAuth.Tests;
 
+[Collection("Environment variable tests")]
 public class RateLimitingTests
 {
     [Theory]

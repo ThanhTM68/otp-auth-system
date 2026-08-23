@@ -128,7 +128,7 @@ public class LoginTests
     }
 
     private static AuthService CreateService(AppDbContext context) =>
-        new(context, new PasswordHasher<User>(), TimeProvider.System, CreateOtpService(), new FakeEmailService(), new FakeJwtTokenService());
+        new(context, new PasswordHasher<User>(), TimeProvider.System, CreateOtpService(), new FakeEmailService(), new FakeJwtTokenService(), new FakeAuditService(context));
 
     private static async Task<User> AddUserAsync(AppDbContext context, string email, string password, bool isActive)
     {

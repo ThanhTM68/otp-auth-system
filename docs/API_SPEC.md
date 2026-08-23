@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi
 
-Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. `POST /api/auth/verify-otp`, JWT, `GET /api/auth/me`, `POST /api/auth/resend-otp` và rate limit HTTP theo IP cho ba endpoint nhạy cảm đã được hiện thực đến Phase 9. Audit đầy đủ vẫn thuộc Phase 10; quota theo User/email trong các phần thiết kế bên dưới là contract mục tiêu, không phải xác nhận đã được hiện thực.
+Tài liệu định nghĩa contract cho ASP.NET Core Web API của hệ thống xác thực OTP. `POST /api/auth/verify-otp`, JWT, `GET /api/auth/me`, `POST /api/auth/resend-otp`, rate limit HTTP theo IP và audit logging đã được hiện thực đến Phase 10. Quota theo User/email trong các phần thiết kế bên dưới là contract mục tiêu, không phải xác nhận đã được hiện thực.
 
 Các endpoint:
 
@@ -300,7 +300,7 @@ Endpoint không nhận email, UserId, OTP cũ, `MaxAttempts` hay TTL từ client
 1. Middleware limit thô theo IP; service validate/load rồi kiểm tra quota theo User, quota phát OTP chung và state/concurrency.
 2. Revoke challenge cũ.
 3. Sinh OTP/challenge mới, giữ `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, đặt `CreatedAt = now`, `ExpiresAt = min(CreatedAt + 3 phút, FlowExpiresAt)` và attempt count về 0.
-4. Ghi `OTP_RESEND` và `OTP_CREATED`, rồi commit.
+4. Revoke challenge cũ và insert challenge mới trong transaction. Sau khi SMTP delivery thành công, ghi `OTP_RESEND_SUCCESS` và `OTP_CREATED`.
 5. Gửi OTP mới tới `User.Email` trong database, với email nêu hạn thực tế từ `ExpiresAt`; sau SMTP, reload/recheck challenge vẫn usable trước khi trả `200`.
 6. Nếu delivery thất bại, không phục hồi challenge cũ, trả `503` và thực hiện best-effort revoke challenge mới. Process/compensation lỗi có thể để row open đến TTL/flow expiry.
 
@@ -418,12 +418,14 @@ Partition key chứa email không được ghi ra log. Deployment sau reverse pr
 | Login password đúng | `LOGIN_PASSWORD_SUCCESS`, kể cả khi quota phát OTP chặn bước tiếp theo |
 | Login qua quota và tạo challenge | `OTP_CREATED` |
 | Login password sai/inactive/unknown | `LOGIN_PASSWORD_FAILED` |
-| Verify OTP sai | `OTP_VERIFY_FAILED`; bắt buộc thêm `OTP_MAX_ATTEMPTS` khi đạt 5 |
+| Verify OTP sai | `OTP_VERIFY_FAILED`; bắt buộc thêm `OTP_MAX_ATTEMPTS_REACHED` khi đạt 5 |
 | Verify challenge expired | Chỉ `OTP_EXPIRED` cho request đó |
-| Verify thành công | `OTP_VERIFY_SUCCESS`, sau khi cấp JWT ghi `AUTHENTICATION_SUCCESS` |
-| Resend thành công | `OTP_RESEND`, `OTP_CREATED` |
+| Verify thành công | `OTP_VERIFY_SUCCESS`, sau khi cấp JWT ghi `JWT_ISSUED` |
+| Verify replay | `OTP_REPLAY_REJECTED` |
+| Resend thành công | `OTP_RESEND_SUCCESS`, `OTP_CREATED` |
+| Resend không khả dụng/cooldown/delivery fail | `OTP_RESEND_FAILED` với reason code allowlist |
 | SMTP lỗi | Bắt buộc `OTP_DELIVERY_FAILED` |
-| Rate limit | `RATE_LIMITED` nếu không tạo log flood |
+| Rate limit | Không ghi audit per-request để tránh log flood |
 
 Audit không chứa email/password request thô, password hash, OTP, OTP hash, JWT, Authorization header, SMTP credential hoặc raw exception.
 

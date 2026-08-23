@@ -230,7 +230,8 @@ public class ResendOtpTests
                 Audience = "OTPAuth.Client.Tests",
                 SigningKey = Convert.ToBase64String(JwtSigningKey),
                 ExpirationMinutes = 15
-            }, JwtSigningKey));
+            }, JwtSigningKey),
+            new FakeAuditService(context));
 
     private static OtpService CreateOtpService() =>
         new(Options.Create(new OtpOptions()), OtpHashingKey);
