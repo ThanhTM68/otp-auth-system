@@ -14,7 +14,8 @@
     --success-soft: #e7f6f1;
     --warning: #9a6700;
     --warning-soft: #fff6d9;
-    --shadow: 0 24px 60px rgba(30, 48, 62, 0.12);
+    --focus: #0f766e;
+    --shadow: 0 18px 48px rgba(30, 48, 62, 0.11);
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -25,6 +26,8 @@
 body {
     min-height: 100vh;
     margin: 0;
+    display: flex;
+    flex-direction: column;
     color: var(--ink);
     background:
         radial-gradient(circle at 8% 12%, rgba(25, 108, 100, 0.12), transparent 28rem),
@@ -45,7 +48,7 @@ a {
 .site-header {
     width: min(1120px, calc(100% - 40px));
     margin: 0 auto;
-    padding: 24px 0;
+    padding: 20px 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -92,11 +95,12 @@ a {
 
 .page-shell {
     width: min(1120px, calc(100% - 40px));
-    margin: 34px auto 50px;
+    margin: 18px auto 34px;
+    flex: 1;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(360px, 470px);
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 450px);
     align-items: center;
-    gap: clamp(48px, 8vw, 112px);
+    gap: clamp(44px, 7vw, 92px);
 }
 
 .eyebrow,
@@ -110,12 +114,11 @@ a {
 }
 
 .intro h1 {
-    max-width: 650px;
+    max-width: 610px;
     margin: 0;
-    font-family: Georgia, "Times New Roman", serif;
-    font-size: clamp(2.5rem, 5.2vw, 4.65rem);
-    line-height: 1.03;
-    letter-spacing: -0.045em;
+    font-size: clamp(2.5rem, 4.4vw, 3.75rem);
+    line-height: 1.08;
+    letter-spacing: -0.04em;
 }
 
 .intro-copy {
@@ -191,11 +194,13 @@ a {
 }
 
 .auth-card {
-    min-height: 570px;
-    padding: clamp(26px, 4vw, 42px);
+    width: 100%;
+    min-width: 0;
+    min-height: 540px;
+    padding: clamp(26px, 3.4vw, 38px);
     border: 1px solid rgba(213, 220, 228, 0.9);
-    border-radius: 24px;
-    background: rgba(255, 255, 255, 0.94);
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.97);
     box-shadow: var(--shadow);
 }
 
@@ -209,9 +214,9 @@ a {
 
 .view-heading h2 {
     margin: 0;
-    font-family: Georgia, "Times New Roman", serif;
-    font-size: 2.15rem;
-    letter-spacing: -0.025em;
+    font-size: 2rem;
+    line-height: 1.2;
+    letter-spacing: -0.03em;
 }
 
 .view-heading > p:last-child {
@@ -222,11 +227,16 @@ a {
 
 form {
     display: grid;
-    gap: 10px;
+    gap: 14px;
+}
+
+.field-group {
+    min-width: 0;
+    display: grid;
+    gap: 7px;
 }
 
 label {
-    margin-top: 7px;
     font-size: 0.9rem;
     font-weight: 750;
 }
@@ -243,9 +253,57 @@ input {
     transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-input:focus {
+input:focus-visible {
     border-color: var(--primary);
     box-shadow: 0 0 0 4px rgba(25, 108, 100, 0.12);
+}
+
+input[aria-invalid="true"] {
+    border-color: var(--danger);
+}
+
+input:disabled {
+    color: var(--muted);
+    background: #f1f4f6;
+    cursor: not-allowed;
+}
+
+.field-error {
+    min-height: 1rem;
+    color: var(--danger);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.field-error:empty {
+    display: none;
+}
+
+.password-control {
+    position: relative;
+}
+
+.password-control input {
+    padding-right: 124px;
+}
+
+.password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    min-width: 108px;
+    min-height: 34px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    color: var(--primary-dark);
+    background: transparent;
+    font-size: 0.82rem;
+    font-weight: 750;
+}
+
+.password-toggle:hover {
+    background: var(--primary-soft);
 }
 
 .otp-input {
@@ -256,6 +314,13 @@ input:focus {
     letter-spacing: 0.34em;
 }
 
+.otp-input::placeholder {
+    color: #8a94a3;
+    font-size: 0.92rem;
+    font-weight: 500;
+    letter-spacing: 0;
+}
+
 button {
     border: 0;
     cursor: pointer;
@@ -263,7 +328,7 @@ button {
 
 button:focus-visible,
 a:focus-visible {
-    outline: 3px solid rgba(25, 108, 100, 0.3);
+    outline: 3px solid var(--focus);
     outline-offset: 3px;
 }
 
@@ -281,6 +346,7 @@ button:disabled {
     padding: 11px 16px;
     border-radius: 11px;
     font-weight: 800;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 100ms ease;
 }
 
 .primary-button {
@@ -292,10 +358,20 @@ button:disabled {
     background: var(--primary-dark);
 }
 
+.primary-button:active:not(:disabled),
+.secondary-button:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
 .secondary-button {
     color: var(--primary-dark);
     border: 1px solid #b9d8d3;
     background: var(--primary-soft);
+}
+
+.secondary-button:hover:not(:disabled) {
+    border-color: #8cbeb7;
+    background: #d5ece8;
 }
 
 .danger-button {
@@ -303,11 +379,21 @@ button:disabled {
     background: transparent;
 }
 
+.danger-button:hover:not(:disabled) {
+    background: var(--danger-soft);
+}
+
 .text-button {
-    padding: 0;
+    min-height: 36px;
+    padding: 6px 4px;
     color: var(--primary);
     background: transparent;
     font-weight: 800;
+}
+
+.text-button:hover {
+    color: var(--primary-dark);
+    text-decoration: underline;
 }
 
 .switch-copy {
@@ -319,6 +405,8 @@ button:disabled {
 .alert {
     margin-bottom: 22px;
     padding: 12px 14px;
+    border: 1px solid transparent;
+    border-left-width: 4px;
     border-radius: 10px;
     font-size: 0.92rem;
     line-height: 1.45;
@@ -326,50 +414,49 @@ button:disabled {
 
 .alert.error {
     color: var(--danger);
+    border-color: #f5c5bd;
+    border-left-color: var(--danger);
     background: var(--danger-soft);
 }
 
 .alert.success {
     color: var(--success);
+    border-color: #bce7d9;
+    border-left-color: var(--success);
     background: var(--success-soft);
 }
 
-.alert.info {
+.alert.info,
+.alert.warning {
     color: var(--warning);
+    border-color: #ead99a;
+    border-left-color: var(--warning);
     background: var(--warning-soft);
 }
 
 .timer-panel {
     margin-bottom: 22px;
-    padding: 14px 16px;
+    padding: 15px 16px;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
+    gap: 9px;
+    border: 1px solid #e4e9ee;
     border-radius: 13px;
     background: #f5f7f9;
 }
 
-.timer-panel div + div {
-    padding-left: 16px;
-    border-left: 1px solid var(--line);
-}
-
-.timer-panel span,
-.timer-panel strong {
-    display: block;
-}
-
-.timer-panel span {
+.timer-panel p {
+    margin: 0;
     color: var(--muted);
-    font-size: 0.78rem;
+    font-size: 0.88rem;
+    line-height: 1.5;
 }
 
 .timer-panel strong {
-    margin-top: 5px;
-    font-size: 1rem;
+    color: var(--ink);
 }
 
-.timer-panel strong.expired {
+.timer-panel p.expired,
+.timer-panel p.expired strong {
     color: var(--danger);
 }
 
@@ -436,7 +523,7 @@ button:disabled {
 footer {
     width: min(1120px, calc(100% - 40px));
     margin: 0 auto;
-    padding: 0 0 25px;
+    padding: 0 0 20px;
     display: flex;
     justify-content: center;
     gap: 9px;
@@ -450,13 +537,14 @@ footer {
 
 @media (max-width: 850px) {
     .page-shell {
+        width: min(520px, calc(100% - 32px));
         margin-top: 12px;
-        grid-template-columns: 1fr;
-        gap: 38px;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
     }
 
-    .intro h1 {
-        font-size: clamp(2.35rem, 11vw, 4rem);
+    .intro {
+        display: none;
     }
 
     .auth-card {
@@ -475,6 +563,10 @@ footer {
         padding-top: 16px;
     }
 
+    .brand small {
+        display: none;
+    }
+
     .swagger-link {
         font-size: 0.86rem;
     }
@@ -491,6 +583,38 @@ footer {
 
     footer {
         flex-wrap: wrap;
+        text-align: center;
+    }
+}
+
+@media (max-width: 380px) {
+    .site-header,
+    .page-shell,
+    footer {
+        width: min(100% - 20px, 1120px);
+    }
+
+    .auth-card {
+        padding: 22px 16px;
+    }
+
+    .view-heading h2 {
+        font-size: 1.78rem;
+    }
+}
+
+@media (max-height: 760px) and (min-width: 851px) {
+    .site-header {
+        padding-block: 14px;
+    }
+
+    .page-shell {
+        margin-top: 8px;
+        margin-bottom: 22px;
+    }
+
+    .auth-card {
+        min-height: 510px;
     }
 }
 

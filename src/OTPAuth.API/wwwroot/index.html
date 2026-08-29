@@ -4,107 +4,146 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'">
+          content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; form-action 'self'; base-uri 'none'">
     <meta name="referrer" content="no-referrer">
-    <title>OTP Authentication Demo</title>
+    <title>Hệ thống xác thực OTP</title>
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
     <header class="site-header">
-        <a class="brand" href="/" aria-label="OTP Authentication Demo">
+        <a class="brand" href="/" aria-label="Hệ thống xác thực OTP">
             <span class="brand-mark" aria-hidden="true">✓</span>
             <span>
-                <strong>OTP Auth</strong>
-                <small>Security demo</small>
+                <strong>OTP Secure</strong>
+                <small>Xác thực an toàn</small>
             </span>
         </a>
-        <a class="swagger-link" href="/swagger" target="_blank" rel="noreferrer">Swagger API</a>
+        <a class="swagger-link" href="/swagger" target="_blank" rel="noreferrer"
+           aria-label="Mở tài liệu kỹ thuật trong thẻ mới">Tài liệu kỹ thuật</a>
     </header>
 
     <main class="page-shell">
         <section class="intro" aria-labelledby="intro-title">
-            <p class="eyebrow">Email · Password · OTP · JWT</p>
-            <h1 id="intro-title">Xác thực hai bước, trình bày trong một luồng rõ ràng.</h1>
+            <p class="eyebrow">Bảo vệ tài khoản</p>
+            <h1 id="intro-title">Xác thực hai bước trong một luồng rõ ràng.</h1>
             <p class="intro-copy">
-                Mật khẩu đúng chỉ mở bước OTP. JWT chỉ được cấp sau khi mã dùng một lần
-                được máy chủ xác minh thành công.
+                Mật khẩu đúng sẽ mở bước nhập mã dùng một lần. Chỉ khi mã được xác minh,
+                người dùng mới hoàn tất đăng nhập.
             </p>
 
             <ol class="flow" aria-label="Luồng xác thực">
                 <li data-flow-step="credentials">
                     <span>1</span>
-                    <div><strong>Mật khẩu</strong><small>Xác minh tài khoản</small></div>
+                    <div><strong>Mật khẩu</strong><small>Kiểm tra tài khoản</small></div>
                 </li>
                 <li data-flow-step="otp">
                     <span>2</span>
-                    <div><strong>OTP Email</strong><small>Mã 6 chữ số</small></div>
+                    <div><strong>Mã xác thực</strong><small>Gồm 6 chữ số</small></div>
                 </li>
                 <li data-flow-step="jwt">
                     <span>3</span>
-                    <div><strong>JWT</strong><small>Truy cập API bảo vệ</small></div>
+                    <div><strong>Hoàn tất</strong><small>Truy cập tài khoản</small></div>
                 </li>
             </ol>
 
             <div class="security-note">
                 <span aria-hidden="true">🔒</span>
-                <p>Password và OTP không được lưu trong trình duyệt. JWT demo chỉ tồn tại trong phiên tab hiện tại.</p>
+                <p>Ứng dụng không lưu lại mật khẩu hoặc mã xác thực sau khi gửi. Phiên đăng nhập chỉ tồn tại trong thẻ hiện tại.</p>
             </div>
         </section>
 
-        <section class="auth-card" aria-live="polite">
-            <div id="alert" class="alert" role="status" hidden></div>
+        <section class="auth-card" aria-label="Khu vực xác thực">
+            <div id="alert" class="alert" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
-            <section class="view" data-view="login">
+            <section class="view" data-view="login" aria-labelledby="login-title">
                 <div class="view-heading">
                     <p class="step-label">Bước 1 / 3</p>
-                    <h2>Đăng nhập</h2>
-                    <p>Nhập thông tin tài khoản để nhận mã OTP qua email.</p>
+                    <h2 id="login-title" tabindex="-1">Đăng nhập</h2>
+                    <p>Đăng nhập để tiếp tục sử dụng hệ thống.</p>
                 </div>
 
-                <form id="login-form" method="post" action="/api/auth/login">
-                    <label for="login-email">Email</label>
-                    <input id="login-email" name="email" type="email" maxlength="254"
-                           autocomplete="email" placeholder="student@example.com" required>
+                <form id="login-form" method="post" action="/api/auth/login" novalidate>
+                    <div class="field-group">
+                        <label for="login-email">Email</label>
+                        <input id="login-email" name="email" type="email" maxlength="254"
+                               autocomplete="email" placeholder="Nhập email của bạn"
+                               aria-describedby="login-email-error" required>
+                        <small id="login-email-error" class="field-error"></small>
+                    </div>
 
-                    <label for="login-password">Mật khẩu</label>
-                    <input id="login-password" name="password" type="password" minlength="8"
-                           maxlength="128" autocomplete="current-password" required>
+                    <div class="field-group">
+                        <label for="login-password">Mật khẩu</label>
+                        <div class="password-control">
+                            <input id="login-password" name="password" type="password" minlength="8"
+                                   maxlength="128" autocomplete="current-password"
+                                   placeholder="Nhập mật khẩu"
+                                   aria-describedby="login-password-error" required>
+                            <button class="password-toggle" type="button" data-password-toggle="login-password"
+                                    aria-controls="login-password" aria-pressed="false">Hiện mật khẩu</button>
+                        </div>
+                        <small id="login-password-error" class="field-error"></small>
+                    </div>
 
                     <button class="primary-button" type="submit" data-idle-text="Đăng nhập"
-                            data-loading-text="Đang đăng nhập…">Đăng nhập</button>
+                            data-loading-text="Đang đăng nhập...">Đăng nhập</button>
                 </form>
 
                 <p class="switch-copy">Chưa có tài khoản?
-                    <button class="text-button" type="button" data-go="register">Đăng ký ngay</button>
+                    <button class="text-button" type="button" data-go="register">Đăng ký</button>
                 </p>
             </section>
 
-            <section class="view" data-view="register" hidden>
+            <section class="view" data-view="register" aria-labelledby="register-title" hidden>
                 <div class="view-heading">
-                    <p class="step-label">Tạo tài khoản</p>
-                    <h2>Đăng ký</h2>
-                    <p>Thông tin hợp lệ sẽ được kiểm tra lại hoàn toàn ở máy chủ.</p>
+                    <p class="step-label">Bắt đầu</p>
+                    <h2 id="register-title" tabindex="-1">Tạo tài khoản</h2>
+                    <p>Điền thông tin bên dưới để tạo tài khoản mới.</p>
                 </div>
 
-                <form id="register-form" method="post" action="/api/auth/register">
-                    <label for="register-name">Họ và tên</label>
-                    <input id="register-name" name="fullName" type="text" minlength="2"
-                           maxlength="100" autocomplete="name" required>
+                <form id="register-form" method="post" action="/api/auth/register" novalidate>
+                    <div class="field-group">
+                        <label for="register-name">Họ và tên</label>
+                        <input id="register-name" name="fullName" type="text" minlength="2"
+                               maxlength="100" autocomplete="name" placeholder="Nhập họ và tên"
+                               aria-describedby="register-name-error" required>
+                        <small id="register-name-error" class="field-error"></small>
+                    </div>
 
-                    <label for="register-email">Email</label>
-                    <input id="register-email" name="email" type="email" maxlength="254"
-                           autocomplete="email" placeholder="student@example.com" required>
+                    <div class="field-group">
+                        <label for="register-email">Email</label>
+                        <input id="register-email" name="email" type="email" maxlength="254"
+                               autocomplete="email" placeholder="Nhập email của bạn"
+                               aria-describedby="register-email-error" required>
+                        <small id="register-email-error" class="field-error"></small>
+                    </div>
 
-                    <label for="register-password">Mật khẩu</label>
-                    <input id="register-password" name="password" type="password" minlength="8"
-                           maxlength="128" autocomplete="new-password" required>
+                    <div class="field-group">
+                        <label for="register-password">Mật khẩu</label>
+                        <div class="password-control">
+                            <input id="register-password" name="password" type="password" minlength="8"
+                                   maxlength="128" autocomplete="new-password" placeholder="Từ 8 đến 128 ký tự"
+                                   aria-describedby="register-password-error" required>
+                            <button class="password-toggle" type="button" data-password-toggle="register-password"
+                                    aria-controls="register-password" aria-pressed="false">Hiện mật khẩu</button>
+                        </div>
+                        <small id="register-password-error" class="field-error"></small>
+                    </div>
 
-                    <label for="register-confirm-password">Xác nhận mật khẩu</label>
-                    <input id="register-confirm-password" name="confirmPassword" type="password"
-                           minlength="8" maxlength="128" autocomplete="new-password" required>
+                    <div class="field-group">
+                        <label for="register-confirm-password">Nhập lại mật khẩu</label>
+                        <div class="password-control">
+                            <input id="register-confirm-password" name="confirmPassword" type="password"
+                                   minlength="8" maxlength="128" autocomplete="new-password"
+                                   placeholder="Nhập lại mật khẩu"
+                                   aria-describedby="register-confirm-password-error" required>
+                            <button class="password-toggle" type="button" data-password-toggle="register-confirm-password"
+                                    aria-controls="register-confirm-password" aria-pressed="false">Hiện mật khẩu</button>
+                        </div>
+                        <small id="register-confirm-password-error" class="field-error"></small>
+                    </div>
 
                     <button class="primary-button" type="submit" data-idle-text="Đăng ký"
-                            data-loading-text="Đang đăng ký…">Đăng ký</button>
+                            data-loading-text="Đang tạo tài khoản...">Đăng ký</button>
                 </form>
 
                 <p class="switch-copy">Đã có tài khoản?
@@ -112,49 +151,53 @@
                 </p>
             </section>
 
-            <section class="view" data-view="otp" hidden>
+            <section class="view" data-view="otp" aria-labelledby="otp-title" hidden>
                 <div class="view-heading">
                     <p class="step-label">Bước 2 / 3</p>
-                    <h2>Xác minh OTP</h2>
-                    <p>Mã gồm 6 chữ số đã được gửi tới email của bạn.</p>
+                    <h2 id="otp-title" tabindex="-1">Xác thực đăng nhập</h2>
+                    <p>Chúng tôi đã gửi mã xác thực gồm 6 chữ số đến <strong id="otp-destination">email của bạn</strong>.</p>
                 </div>
 
-                <div class="timer-panel">
-                    <div>
-                        <span>Mã còn hiệu lực</span>
+                <div class="timer-panel" aria-label="Thời gian hiệu lực của mã">
+                    <p id="otp-timer-message">
+                        <span id="otp-timer-label">Mã sẽ hết hạn sau</span>
                         <strong id="otp-countdown">03:00</strong>
-                    </div>
-                    <div>
-                        <span>Gửi lại sau</span>
-                        <strong id="resend-countdown">60 giây</strong>
-                    </div>
+                    </p>
+                    <p id="resend-timer-message">
+                        <span id="resend-timer-label">Bạn có thể gửi lại mã sau</span>
+                        <strong id="resend-countdown">60 giây</strong><span id="resend-period">.</span>
+                    </p>
                 </div>
 
-                <form id="otp-form" method="post" action="/api/auth/verify-otp">
-                    <label for="otp-input">Mã OTP</label>
-                    <input id="otp-input" class="otp-input" name="otp" type="text"
-                           inputmode="numeric" autocomplete="one-time-code" maxlength="6"
-                           pattern="[0-9]{6}" placeholder="000000" required>
+                <form id="otp-form" method="post" action="/api/auth/verify-otp" novalidate>
+                    <div class="field-group">
+                        <label for="otp-input">Mã OTP</label>
+                        <input id="otp-input" class="otp-input" name="otp" type="text"
+                               inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                               pattern="[0-9]{6}" placeholder="Nhập mã gồm 6 chữ số"
+                               aria-describedby="otp-input-error" required>
+                        <small id="otp-input-error" class="field-error"></small>
+                    </div>
 
-                    <button class="primary-button" type="submit" data-idle-text="Xác minh OTP"
-                            data-loading-text="Đang xác minh…">Xác minh OTP</button>
+                    <button class="primary-button" type="submit" data-idle-text="Xác nhận"
+                            data-loading-text="Đang xác thực...">Xác nhận</button>
                 </form>
 
                 <div class="otp-actions">
                     <button id="resend-button" class="secondary-button" type="button"
-                            data-idle-text="Gửi lại OTP" data-loading-text="Đang gửi lại…">
-                        Gửi lại OTP
+                            data-idle-text="Gửi lại mã" data-loading-text="Đang gửi mã mới...">
+                        Gửi lại mã
                     </button>
-                    <button class="text-button" type="button" data-cancel-otp>Đăng nhập lại</button>
+                    <button class="text-button" type="button" data-cancel-otp>Quay lại đăng nhập</button>
                 </div>
             </section>
 
-            <section class="view" data-view="dashboard" hidden>
+            <section class="view" data-view="dashboard" aria-labelledby="dashboard-title" hidden>
                 <div class="success-icon" aria-hidden="true">✓</div>
                 <div class="view-heading centered">
                     <p class="step-label">Bước 3 / 3</p>
-                    <h2>Đăng nhập thành công</h2>
-                    <p>JWT hợp lệ đã mở quyền truy cập API bảo vệ.</p>
+                    <h2 id="dashboard-title" tabindex="-1">Đăng nhập thành công</h2>
+                    <p>Bạn đã hoàn tất xác thực bằng mật khẩu và mã OTP.</p>
                 </div>
 
                 <dl class="profile-card">
@@ -164,19 +207,15 @@
                 </dl>
 
                 <button id="check-profile-button" class="secondary-button" type="button"
-                        data-idle-text="Kiểm tra API bảo vệ"
-                        data-loading-text="Đang kiểm tra…">Kiểm tra API bảo vệ</button>
+                        data-idle-text="Kiểm tra phiên đăng nhập"
+                        data-loading-text="Đang kiểm tra...">Kiểm tra phiên đăng nhập</button>
                 <button id="logout-button" class="danger-button" type="button">Đăng xuất</button>
             </section>
         </section>
     </main>
 
     <footer>
-        <span>ASP.NET Core Web API</span>
-        <span aria-hidden="true">·</span>
-        <span>SQL Server</span>
-        <span aria-hidden="true">·</span>
-        <span>JWT Authentication</span>
+        <span>Đồ án môn An toàn và Bảo mật thông tin</span>
     </footer>
 
     <script src="/app.js" defer></script>
