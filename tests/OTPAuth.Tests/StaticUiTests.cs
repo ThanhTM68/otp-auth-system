@@ -73,7 +73,12 @@ public class StaticUiTests
         Assert.DoesNotContain("HashingKey", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("ConnectionStrings", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("innerHTML", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("insertAdjacentHTML", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("document.write", script, StringComparison.Ordinal);
         Assert.DoesNotContain("eval(", script, StringComparison.Ordinal);
+        Assert.Equal(1, script.Split("sessionStorage.setItem(", StringSplitOptions.None).Length - 1);
+        Assert.Contains("sessionStorage.setItem(tokenStorageKey, result.accessToken)", script, StringComparison.Ordinal);
+        Assert.Contains("sessionStorage.removeItem(tokenStorageKey)", script, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -84,16 +89,21 @@ public class StaticUiTests
 
         var html = await client.GetStringAsync("/");
 
-        Assert.Contains("Đăng nhập để tiếp tục sử dụng hệ thống.", html, StringComparison.Ordinal);
-        Assert.Contains("Điền thông tin bên dưới để tạo tài khoản mới.", html, StringComparison.Ordinal);
-        Assert.Contains("Xác thực đăng nhập", html, StringComparison.Ordinal);
-        Assert.Contains("Mã sẽ hết hạn sau", html, StringComparison.Ordinal);
+        Assert.Contains("Bảo vệ tài khoản", html, StringComparison.Ordinal);
+        Assert.Contains("bằng xác thực hai bước.", html, StringComparison.Ordinal);
+        Assert.Contains("Nhập thông tin tài khoản để tiếp tục.", html, StringComparison.Ordinal);
+        Assert.Contains("Chỉ mất một phút để bắt đầu.", html, StringComparison.Ordinal);
+        Assert.Contains("Nhập mã xác thực", html, StringComparison.Ordinal);
+        Assert.Contains("Mã hết hạn sau", html, StringComparison.Ordinal);
         Assert.Contains("Gửi lại mã", html, StringComparison.Ordinal);
         Assert.Contains("Kiểm tra phiên đăng nhập", html, StringComparison.Ordinal);
         Assert.Contains("Đang tạo tài khoản...", html, StringComparison.Ordinal);
-        Assert.Contains("Đang đăng nhập...", html, StringComparison.Ordinal);
+        Assert.Contains("Đang kiểm tra...", html, StringComparison.Ordinal);
         Assert.Contains("Đang xác thực...", html, StringComparison.Ordinal);
         Assert.Contains("Đang gửi mã mới...", html, StringComparison.Ordinal);
+        Assert.Contains("Thông tin xác thực được bảo vệ", html, StringComparison.Ordinal);
+        Assert.Contains("Mật khẩu và mã OTP không được lưu ở dạng văn bản thuần.", html, StringComparison.Ordinal);
+        Assert.Contains("Xác thực thành công", html, StringComparison.Ordinal);
         Assert.DoesNotContain(">JWT<", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("bearer token", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("SMTP", html, StringComparison.OrdinalIgnoreCase);
@@ -114,6 +124,11 @@ public class StaticUiTests
 
         Assert.Contains("data-password-toggle=\"login-password\"", html, StringComparison.Ordinal);
         Assert.Contains("data-password-toggle=\"register-password\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-password-toggle=\"register-confirm-password\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-label=\"Hiện mật khẩu\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-pressed=\"false\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-current=\"step\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"otp-expiry-status\"", html, StringComparison.Ordinal);
         Assert.Contains("aria-live=\"polite\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"otp-input\" class=\"otp-input\" name=\"otp\" type=\"text\"", html, StringComparison.Ordinal);
         Assert.Contains("inputmode=\"numeric\"", html, StringComparison.Ordinal);
@@ -137,27 +152,67 @@ public class StaticUiTests
         Assert.DoesNotContain("parseInt(otp", script, StringComparison.Ordinal);
         Assert.Contains("Email hoặc mật khẩu không chính xác.", script, StringComparison.Ordinal);
         Assert.Contains("Mật khẩu nhập lại không khớp.", script, StringComparison.Ordinal);
-        Assert.Contains("Mã xác thực mới đã được gửi đến email của bạn.", script, StringComparison.Ordinal);
+        Assert.Contains("Mã mới đã được gửi.", script, StringComparison.Ordinal);
         Assert.Contains("Phiên đăng nhập đang hoạt động.", script, StringComparison.Ordinal);
         Assert.Contains("Bạn đã đăng xuất.", script, StringComparison.Ordinal);
         Assert.Contains("sessionGeneration", script, StringComparison.Ordinal);
         Assert.Contains("otpActionInProgress", script, StringComparison.Ordinal);
+        Assert.Contains("setPasswordToggleState", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("button.textContent = shouldShow", script, StringComparison.Ordinal);
+        Assert.Contains("item.setAttribute(\"aria-current\", \"step\")", script, StringComparison.Ordinal);
+        Assert.Contains("expiryJustAnnounced", script, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Styles_IncludeResponsiveAndVisibleFocusStates()
+    public async Task Styles_IncludeGlassFallbackResponsiveAndAccessibleMotionStates()
     {
         using var factory = new SecurityWebApplicationFactory();
         using var client = factory.CreateClient();
 
         var styles = await client.GetStringAsync("/styles.css");
 
-        Assert.Contains("@media (max-width: 850px)", styles, StringComparison.Ordinal);
+        Assert.Contains("color-scheme: dark", styles, StringComparison.Ordinal);
+        Assert.Contains("background: var(--surface-card-fallback)", styles, StringComparison.Ordinal);
+        Assert.Contains("backdrop-filter: blur(26px)", styles, StringComparison.Ordinal);
+        Assert.Contains("@media (max-width: 900px)", styles, StringComparison.Ordinal);
         Assert.Contains("@media (max-width: 520px)", styles, StringComparison.Ordinal);
         Assert.Contains("@media (max-width: 380px)", styles, StringComparison.Ordinal);
+        Assert.Contains("@media (prefers-reduced-motion: reduce)", styles, StringComparison.Ordinal);
         Assert.Contains("button:focus-visible", styles, StringComparison.Ordinal);
         Assert.Contains("a:focus-visible", styles, StringComparison.Ordinal);
         Assert.Contains("overflow-wrap: anywhere", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Root_PreservesAllFrontendDomHooks()
+    {
+        using var factory = new SecurityWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var html = await client.GetStringAsync("/");
+
+        string[] requiredIds =
+        [
+            "alert", "login-form", "login-email", "login-password", "register-form",
+            "register-name", "register-email", "register-password", "register-confirm-password",
+            "otp-form", "otp-input", "otp-destination", "otp-timer-message", "otp-timer-label",
+            "otp-countdown", "resend-timer-label", "resend-countdown", "resend-period", "otp-expiry-status",
+            "resend-button", "dashboard-greeting", "profile-name", "profile-email",
+            "check-profile-button", "logout-button"
+        ];
+
+        foreach (var id in requiredIds)
+        {
+            Assert.Contains($"id=\"{id}\"", html, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("data-view=\"login\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-view=\"register\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-view=\"otp\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-view=\"dashboard\"", html, StringComparison.Ordinal);
+        Assert.Equal(3, html.Split("data-flow-step=", StringSplitOptions.None).Length - 1);
+        Assert.Contains("data-cancel-otp", html, StringComparison.Ordinal);
+        Assert.Contains("href=\"/swagger\"", html, StringComparison.Ordinal);
     }
 
     private static void AssertHeaderContains(

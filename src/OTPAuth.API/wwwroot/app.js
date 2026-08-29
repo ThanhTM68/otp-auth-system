@@ -16,6 +16,7 @@
         timerId: null,
         authActionInProgress: false,
         otpActionInProgress: false,
+        expiryAnnounced: false,
         sessionGeneration: 0
     };
 
@@ -39,10 +40,12 @@
     const resendTimerLabel = document.querySelector("#resend-timer-label");
     const resendCountdown = document.querySelector("#resend-countdown");
     const resendPeriod = document.querySelector("#resend-period");
+    const otpExpiryStatus = document.querySelector("#otp-expiry-status");
     const resendButton = document.querySelector("#resend-button");
     const cancelOtpButton = document.querySelector("[data-cancel-otp]");
     const profileName = document.querySelector("#profile-name");
     const profileEmail = document.querySelector("#profile-email");
+    const dashboardGreeting = document.querySelector("#dashboard-greeting");
     const checkProfileButton = document.querySelector("#check-profile-button");
     const logoutButton = document.querySelector("#logout-button");
     const navigationButtons = [...document.querySelectorAll("[data-go]")];
@@ -66,22 +69,21 @@
     }
 
     function updateFlow(viewName) {
-        const stage = viewName === "otp" ? 2 : viewName === "dashboard" ? 3 : 1;
+        const stage = viewName === "register" ? 0 : viewName === "otp" ? 2 : viewName === "dashboard" ? 3 : 1;
         document.querySelectorAll("[data-flow-step]").forEach((item, index) => {
             const step = index + 1;
             item.classList.toggle("active", step === stage);
             item.classList.toggle("complete", step < stage);
+            if (step === stage) {
+                item.setAttribute("aria-current", "step");
+            } else {
+                item.removeAttribute("aria-current");
+            }
         });
     }
 
     function showAlert(message, type = "error") {
-        const labels = {
-            error: "Có lỗi:",
-            success: "Thành công:",
-            warning: "Lưu ý:",
-            info: "Thông tin:"
-        };
-        alertBox.textContent = `${labels[type] || labels.info} ${message}`;
+        alertBox.textContent = message;
         alertBox.className = `alert ${type}`;
         alertBox.setAttribute("role", type === "error" ? "alert" : "status");
         alertBox.setAttribute("aria-live", type === "error" ? "assertive" : "polite");
@@ -125,7 +127,9 @@
         state.expiresAt = null;
         state.resendAvailableAt = null;
         state.otpActionInProgress = false;
+        state.expiryAnnounced = false;
         otpDestination.textContent = "email của bạn";
+        otpExpiryStatus.textContent = "";
         otpInput.value = "";
         clearFieldError(otpInput);
         stopTimer();
@@ -137,6 +141,7 @@
         clearChallenge();
         profileName.textContent = "—";
         profileEmail.textContent = "—";
+        dashboardGreeting.textContent = "Xin chào, bạn";
     }
 
     function resetForms() {
@@ -166,6 +171,16 @@
         const otpSeconds = secondsUntil(state.expiresAt, now);
         const resendSeconds = secondsUntil(state.resendAvailableAt, now);
         const otpExpired = hasChallenge && otpSeconds === 0;
+        const expiryJustAnnounced = otpExpired && !state.expiryAnnounced;
+        const focusWasOnOtpControl = document.activeElement === otpInput || document.activeElement === otpSubmitButton;
+
+        if (expiryJustAnnounced) {
+            state.expiryAnnounced = true;
+            otpExpiryStatus.textContent = "Mã xác thực đã hết hạn. Bạn có thể yêu cầu mã mới.";
+        } else if (!otpExpired && state.expiryAnnounced) {
+            state.expiryAnnounced = false;
+            otpExpiryStatus.textContent = "";
+        }
 
         if (otpExpired) {
             otpTimerLabel.textContent = "Mã xác thực đã hết hạn.";
@@ -173,19 +188,19 @@
             otpCountdown.hidden = true;
             otpTimerMessage.classList.add("expired");
         } else {
-            otpTimerLabel.textContent = "Mã sẽ hết hạn sau";
+            otpTimerLabel.textContent = "Mã hết hạn sau";
             otpCountdown.textContent = formatDuration(otpSeconds);
             otpCountdown.hidden = false;
             otpTimerMessage.classList.remove("expired");
         }
 
         if (hasChallenge && resendSeconds > 0) {
-            resendTimerLabel.textContent = "Bạn có thể gửi lại mã sau";
+            resendTimerLabel.textContent = "Có thể gửi lại sau";
             resendCountdown.textContent = `${resendSeconds} giây`;
             resendCountdown.hidden = false;
             resendPeriod.hidden = false;
         } else {
-            resendTimerLabel.textContent = "Bạn có thể gửi lại mã ngay.";
+            resendTimerLabel.textContent = "Có thể gửi lại ngay.";
             resendCountdown.textContent = "";
             resendCountdown.hidden = true;
             resendPeriod.hidden = true;
@@ -195,6 +210,17 @@
         otpSubmitButton.disabled = !hasChallenge || otpExpired || state.otpActionInProgress;
         resendButton.disabled = !hasChallenge || resendSeconds > 0 || state.otpActionInProgress;
         cancelOtpButton.disabled = state.otpActionInProgress;
+
+        const resendIdleText = otpExpired ? "Gửi mã mới" : "Gửi lại mã";
+        resendButton.dataset.idleText = resendIdleText;
+        if (!state.otpActionInProgress) {
+            resendButton.textContent = resendIdleText;
+        }
+
+        if (expiryJustAnnounced && focusWasOnOtpControl) {
+            const focusTarget = resendButton.disabled ? cancelOtpButton : resendButton;
+            window.requestAnimationFrame(() => focusTarget.focus());
+        }
 
         if (hasChallenge && otpSeconds === 0 && resendSeconds === 0) {
             stopTimer();
@@ -314,12 +340,22 @@
         return true;
     }
 
+    function setPasswordToggleState(button, visible) {
+        const label = visible ? "Ẩn mật khẩu" : "Hiện mật khẩu";
+        button.setAttribute("aria-pressed", visible ? "true" : "false");
+        button.setAttribute("aria-label", label);
+        button.setAttribute("title", label);
+        const accessibleLabel = button.querySelector("[data-password-toggle-label]");
+        if (accessibleLabel) {
+            accessibleLabel.textContent = label;
+        }
+    }
+
     function resetPasswordVisibility() {
         document.querySelectorAll("[data-password-toggle]").forEach(button => {
             const input = document.getElementById(button.dataset.passwordToggle);
             input.type = "password";
-            button.textContent = "Hiện mật khẩu";
-            button.setAttribute("aria-pressed", "false");
+            setPasswordToggleState(button, false);
         });
     }
 
@@ -383,7 +419,7 @@
                 return "Bạn đã thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.";
             }
             if (error?.code === "OTP_DELIVERY_UNAVAILABLE") {
-                return "Chưa thể gửi mã xác thực. Vui lòng thử đăng nhập lại sau.";
+                return "Chưa thể gửi mã xác thực. Vui lòng thử lại sau.";
             }
             return "Không thể đăng nhập lúc này. Vui lòng thử lại sau.";
         }
@@ -406,7 +442,7 @@
                 return "Bạn đã yêu cầu mã quá nhiều lần. Vui lòng thử lại sau.";
             }
             if (error?.code === "OTP_DELIVERY_UNAVAILABLE") {
-                return "Chưa thể gửi mã xác thực mới. Vui lòng đăng nhập lại sau.";
+                return "Chưa thể gửi mã xác thực. Vui lòng thử lại sau.";
             }
             if (error?.code === "RESEND_NOT_AVAILABLE") {
                 return "Không thể gửi lại mã. Vui lòng đăng nhập lại để nhận mã mới.";
@@ -540,7 +576,7 @@
             clearChallenge();
             showView("dashboard");
             if (await loadProfile(false)) {
-                showAlert("Bạn đã đăng nhập và xác thực thành công.", "success");
+                showAlert("Xác thực thành công.", "success");
             }
         } catch (error) {
             if (error?.code === "VERIFY_RESPONSE_INVALID") {
@@ -588,7 +624,7 @@
             clearFieldError(otpInput);
             startTimer();
             shouldRefocusOtp = true;
-            showAlert("Mã xác thực mới đã được gửi đến email của bạn.", "success");
+            showAlert("Mã mới đã được gửi.", "success");
         } catch (error) {
             const retryAfter = Number.parseInt(error?.retryAfter, 10);
             if (error?.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
@@ -638,6 +674,7 @@
 
             profileName.textContent = profile.fullName || "—";
             profileEmail.textContent = profile.email || "—";
+            dashboardGreeting.textContent = `Xin chào, ${profile.email || "bạn"}`;
             showView("dashboard", false);
             return true;
         } catch (error) {
@@ -699,8 +736,7 @@
             const input = document.getElementById(button.dataset.passwordToggle);
             const shouldShow = input.type === "password";
             input.type = shouldShow ? "text" : "password";
-            button.textContent = shouldShow ? "Ẩn mật khẩu" : "Hiện mật khẩu";
-            button.setAttribute("aria-pressed", shouldShow ? "true" : "false");
+            setPasswordToggleState(button, shouldShow);
             input.focus();
         });
     });
