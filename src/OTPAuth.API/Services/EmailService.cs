@@ -4,11 +4,16 @@ using MailKit.Security;
 using Microsoft.Extensions.Options;
 using MimeKit;
 using OTPAuth.API.Configuration;
+using System.Diagnostics;
 using System.Net.Sockets;
 
 namespace OTPAuth.API.Services;
 
-public sealed record OtpEmailMessage(string RecipientEmail, string Otp, DateTimeOffset ExpiresAt);
+public sealed record OtpEmailMessage(
+    string RecipientEmail,
+    string Otp,
+    DateTimeOffset ExpiresAt,
+    bool EnableLoginPerformanceLogging = false);
 
 public interface IEmailService
 {
@@ -54,9 +59,35 @@ public sealed class EmailService(
             email.Body = new TextPart("plain") { Text = BuildOtpBody(message) };
 
             using var smtpClient = new SmtpClient();
-            await smtpClient.ConnectAsync(options.Host, options.Port, SecureSocketOptions.StartTls, cancellationToken);
-            await smtpClient.AuthenticateAsync(options.Username.Trim(), smtpPassword, cancellationToken);
-            await smtpClient.SendAsync(email, cancellationToken);
+            var connectStopwatch = Stopwatch.StartNew();
+            try
+            {
+                await smtpClient.ConnectAsync(options.Host, options.Port, SecureSocketOptions.StartTls, cancellationToken);
+            }
+            finally
+            {
+                LogLoginPerformance(message, "SMTP Connect", connectStopwatch);
+            }
+
+            var authenticateStopwatch = Stopwatch.StartNew();
+            try
+            {
+                await smtpClient.AuthenticateAsync(options.Username.Trim(), smtpPassword, cancellationToken);
+            }
+            finally
+            {
+                LogLoginPerformance(message, "SMTP Authenticate", authenticateStopwatch);
+            }
+
+            var sendStopwatch = Stopwatch.StartNew();
+            try
+            {
+                await smtpClient.SendAsync(email, cancellationToken);
+            }
+            finally
+            {
+                LogLoginPerformance(message, "SMTP Send", sendStopwatch);
+            }
             await smtpClient.DisconnectAsync(true, cancellationToken);
 
             logger.LogInformation("OTP email delivery succeeded for recipient {Recipient}", MaskEmail(message.RecipientEmail));
@@ -141,6 +172,21 @@ public sealed class EmailService(
 
     private static string NormalizeAppPassword(string password) =>
         string.Concat(password.Where(character => !char.IsWhiteSpace(character)));
+
+    private void LogLoginPerformance(
+        OtpEmailMessage message,
+        string stage,
+        Stopwatch stopwatch)
+    {
+        stopwatch.Stop();
+        if (message.EnableLoginPerformanceLogging)
+        {
+            logger.LogInformation(
+                "LOGIN PERF {Stage}: {ElapsedMilliseconds}ms",
+                stage,
+                stopwatch.ElapsedMilliseconds);
+        }
+    }
 
     private void LogSmtpFailure(string category, Exception exception, string recipientEmail) =>
         logger.LogWarning(

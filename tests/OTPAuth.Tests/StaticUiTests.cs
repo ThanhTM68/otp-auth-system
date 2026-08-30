@@ -46,6 +46,8 @@ public class StaticUiTests
     [Theory]
     [InlineData("/styles.css", "text/css")]
     [InlineData("/app.js", "javascript")]
+    [InlineData("/assets/otp-logo.jpeg", "image/jpeg")]
+    [InlineData("/assets/otp-background.jpeg", "image/jpeg")]
     public async Task StaticAsset_IsServed(string path, string expectedContentType)
     {
         using var factory = new SecurityWebApplicationFactory();
@@ -104,6 +106,8 @@ public class StaticUiTests
         Assert.Contains("Thông tin xác thực được bảo vệ", html, StringComparison.Ordinal);
         Assert.Contains("Mật khẩu và mã OTP không được lưu ở dạng văn bản thuần.", html, StringComparison.Ordinal);
         Assert.Contains("Xác thực thành công", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Bảo vệ từng phiên đăng nhập", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Danh tính số an toàn", html, StringComparison.Ordinal);
         Assert.DoesNotContain(">JWT<", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("bearer token", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("SMTP", html, StringComparison.OrdinalIgnoreCase);
@@ -128,6 +132,7 @@ public class StaticUiTests
         Assert.Contains("aria-label=\"Hiện mật khẩu\"", html, StringComparison.Ordinal);
         Assert.Contains("aria-pressed=\"false\"", html, StringComparison.Ordinal);
         Assert.Contains("aria-current=\"step\"", html, StringComparison.Ordinal);
+        Assert.Contains("src=\"/assets/otp-logo.jpeg\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"otp-expiry-status\"", html, StringComparison.Ordinal);
         Assert.Contains("aria-live=\"polite\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"otp-input\" class=\"otp-input\" name=\"otp\" type=\"text\"", html, StringComparison.Ordinal);
@@ -174,6 +179,7 @@ public class StaticUiTests
         Assert.Contains("color-scheme: dark", styles, StringComparison.Ordinal);
         Assert.Contains("background: var(--surface-card-fallback)", styles, StringComparison.Ordinal);
         Assert.Contains("backdrop-filter: blur(26px)", styles, StringComparison.Ordinal);
+        Assert.Contains("url(\"/assets/otp-background.jpeg\")", styles, StringComparison.Ordinal);
         Assert.Contains("@media (max-width: 900px)", styles, StringComparison.Ordinal);
         Assert.Contains("@media (max-width: 520px)", styles, StringComparison.Ordinal);
         Assert.Contains("@media (max-width: 380px)", styles, StringComparison.Ordinal);

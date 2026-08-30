@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
+using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using OTPAuth.API.DTOs;
@@ -13,7 +14,9 @@ namespace OTPAuth.API.Controllers;
 [Route("api/auth")]
 [RequestSizeLimit(16 * 1024)]
 [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status413PayloadTooLarge)]
-public class AuthController(IAuthService authService) : ControllerBase
+public class AuthController(
+    IAuthService authService,
+    ILogger<AuthController> logger) : ControllerBase
 {
     [HttpPost("register")]
     [EnableRateLimiting(AuthenticationRateLimitPolicies.Register)]
@@ -67,28 +70,39 @@ public class AuthController(IAuthService authService) : ControllerBase
         LoginRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await authService.LoginAsync(request, cancellationToken);
-
-        return result.Status switch
+        var totalStopwatch = Stopwatch.StartNew();
+        try
         {
-            LoginStatus.Success => Ok(result.Response),
-            LoginStatus.InvalidCredentials => Unauthorized(CreateProblem(
-                StatusCodes.Status401Unauthorized,
-                "Thông tin đăng nhập không hợp lệ.",
-                "INVALID_CREDENTIALS")),
-            LoginStatus.EmailDeliveryFailure => StatusCode(
-                StatusCodes.Status503ServiceUnavailable,
-                CreateProblem(
+            var result = await authService.LoginAsync(request, cancellationToken);
+
+            return result.Status switch
+            {
+                LoginStatus.Success => Ok(result.Response),
+                LoginStatus.InvalidCredentials => Unauthorized(CreateProblem(
+                    StatusCodes.Status401Unauthorized,
+                    "Thông tin đăng nhập không hợp lệ.",
+                    "INVALID_CREDENTIALS")),
+                LoginStatus.EmailDeliveryFailure => StatusCode(
                     StatusCodes.Status503ServiceUnavailable,
-                    "Không thể gửi mã xác thực. Vui lòng thử lại sau.",
-                    "OTP_DELIVERY_UNAVAILABLE")),
-            _ => StatusCode(
-                StatusCodes.Status500InternalServerError,
-                CreateProblem(
+                    CreateProblem(
+                        StatusCodes.Status503ServiceUnavailable,
+                        "Không thể gửi mã xác thực. Vui lòng thử lại sau.",
+                        "OTP_DELIVERY_UNAVAILABLE")),
+                _ => StatusCode(
                     StatusCodes.Status500InternalServerError,
-                    "Không thể hoàn tất đăng nhập. Vui lòng thử lại sau.",
-                    "INTERNAL_ERROR"))
-        };
+                    CreateProblem(
+                        StatusCodes.Status500InternalServerError,
+                        "Không thể hoàn tất đăng nhập. Vui lòng thử lại sau.",
+                        "INTERNAL_ERROR"))
+            };
+        }
+        finally
+        {
+            totalStopwatch.Stop();
+            logger.LogInformation(
+                "LOGIN PERF Total: {ElapsedMilliseconds}ms",
+                totalStopwatch.ElapsedMilliseconds);
+        }
     }
 
     [HttpPost("verify-otp")]

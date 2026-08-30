@@ -12,6 +12,7 @@
     --surface-field: rgba(3, 17, 28, 0.55);
     --surface-field-opaque: #0a202d;
     --surface-overlay: rgba(4, 16, 27, 0.84);
+    --logo-surface: #f4f7f7;
     --border-soft: rgba(226, 252, 249, 0.14);
     --border-medium: rgba(226, 252, 249, 0.22);
     --border-control: rgba(226, 252, 249, 0.4);
@@ -40,8 +41,8 @@
     --warning-soft: rgba(251, 191, 36, 0.1);
     --focus: #5eead4;
     --button-text: #f7fffe;
-    --page-glow-teal: rgba(20, 184, 166, 0.2);
-    --page-glow-blue: rgba(14, 116, 144, 0.2);
+    --app-background-image: url("/assets/otp-background.jpeg");
+    --background-scrim: linear-gradient(135deg, rgba(4, 16, 27, 0.4), rgba(4, 16, 27, 0.62));
     --page-vignette: rgba(1, 8, 14, 0.62);
     --shadow-card: 0 30px 80px rgba(0, 7, 13, 0.42), 0 10px 28px rgba(0, 7, 13, 0.24);
     --shadow-button: 0 12px 28px rgba(15, 118, 110, 0.3);
@@ -121,28 +122,17 @@ svg {
 }
 
 /* 3. Background depth */
-body::before,
-body::after {
+body::before {
     position: fixed;
     z-index: -2;
-    width: min(42rem, 70vw);
-    aspect-ratio: 1;
-    border-radius: 50%;
+    inset: 0;
     content: "";
     pointer-events: none;
-    filter: blur(78px);
-}
-
-body::before {
-    top: -25rem;
-    left: -18rem;
-    background: var(--page-glow-teal);
-}
-
-body::after {
-    right: -20rem;
-    bottom: -27rem;
-    background: var(--page-glow-blue);
+    background-color: var(--bg-deep);
+    background-image: var(--background-scrim), var(--app-background-image);
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
 }
 
 .page-shell::before {
@@ -179,38 +169,26 @@ body::after {
     height: 42px;
     display: grid;
     place-items: center;
+    overflow: hidden;
     border: 1px solid var(--border-medium);
     border-radius: 13px;
-    color: var(--accent-pale);
-    background: var(--accent-soft);
+    background: var(--logo-surface);
     box-shadow: inset 0 1px 0 var(--border-medium);
 }
 
-.brand-mark svg {
-    width: 24px;
-    height: 24px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.7;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
-
-.brand-copy strong,
-.brand-copy small {
-    display: block;
+.brand-mark img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scale(1.58);
+    transform-origin: center;
 }
 
 .brand-copy strong {
+    display: block;
     font-size: 1.02rem;
     font-weight: 720;
     letter-spacing: -0.01em;
-}
-
-.brand-copy small {
-    margin-top: 1px;
-    color: var(--text-muted);
-    font-size: 0.75rem;
 }
 
 .swagger-link {
@@ -261,7 +239,6 @@ body::after {
     min-width: 0;
 }
 
-.eyebrow,
 .step-label {
     margin: 0 0 12px;
     color: var(--accent);
@@ -269,22 +246,6 @@ body::after {
     font-weight: 720;
     letter-spacing: 0.15em;
     text-transform: uppercase;
-}
-
-.eyebrow {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.eyebrow svg {
-    width: 18px;
-    height: 18px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.6;
-    stroke-linecap: round;
-    stroke-linejoin: round;
 }
 
 .intro h1 {
@@ -1242,10 +1203,6 @@ footer {
 }
 
 @media (max-width: 520px) {
-    .brand-copy small {
-        display: none;
-    }
-
     .swagger-link {
         padding-inline: 8px;
         font-size: 0.8rem;

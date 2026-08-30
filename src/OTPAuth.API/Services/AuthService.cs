@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using OTPAuth.API.Data;
 using OTPAuth.API.DTOs;
 using OTPAuth.API.Entities;
+using System.Diagnostics;
 
 namespace OTPAuth.API.Services;
 
@@ -65,7 +66,8 @@ public class AuthService(
     IOtpService otpService,
     IEmailService emailService,
     IJwtTokenService jwtTokenService,
-    IAuditService auditService) : IAuthService
+    IAuditService auditService,
+    ILogger<AuthService>? logger = null) : IAuthService
 {
     private readonly string dummyPasswordHash = passwordHasher.HashPassword(
         new User(),
@@ -117,14 +119,32 @@ public class AuthService(
     public async Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
         var normalizedEmail = EmailNormalizer.Normalize(request.Email!);
-        var user = await dbContext.Users.SingleOrDefaultAsync(
-            candidate => candidate.NormalizedEmail == normalizedEmail,
-            cancellationToken);
+        User? user;
+        var findUserStopwatch = Stopwatch.StartNew();
+        try
+        {
+            user = await dbContext.Users.SingleOrDefaultAsync(
+                candidate => candidate.NormalizedEmail == normalizedEmail,
+                cancellationToken);
+        }
+        finally
+        {
+            LogLoginPerformance(logger, "FindUser", findUserStopwatch);
+        }
 
-        var passwordVerification = passwordHasher.VerifyHashedPassword(
-            user ?? new User(),
-            user?.PasswordHash ?? dummyPasswordHash,
-            request.Password!);
+        PasswordVerificationResult passwordVerification;
+        var verifyPasswordStopwatch = Stopwatch.StartNew();
+        try
+        {
+            passwordVerification = passwordHasher.VerifyHashedPassword(
+                user ?? new User(),
+                user?.PasswordHash ?? dummyPasswordHash,
+                request.Password!);
+        }
+        finally
+        {
+            LogLoginPerformance(logger, "VerifyPassword", verifyPasswordStopwatch);
+        }
 
         if (user is null || !user.IsActive || passwordVerification == PasswordVerificationResult.Failed)
         {
@@ -148,12 +168,22 @@ public class AuthService(
             otpService.RevokeChallenge(openChallenge);
         }
 
-        var creation = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
+        OtpChallengeCreation creation;
+        var createChallengeStopwatch = Stopwatch.StartNew();
+        try
+        {
+            creation = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
+        }
+        finally
+        {
+            LogLoginPerformance(logger, "CreateChallenge", createChallengeStopwatch);
+        }
         var challenge = creation.Challenge;
         dbContext.OtpChallenges.Add(challenge);
         auditService.Record(new AuditEvent(AuditEventTypes.LoginPasswordSuccess, true, UserId: user.Id));
         auditService.Record(new AuditEvent(AuditEventTypes.OtpCreated, true, user.Id, challenge.Id));
 
+        var saveChallengeStopwatch = Stopwatch.StartNew();
         try
         {
             await dbContext.SaveChangesAsync(cancellationToken);
@@ -162,11 +192,19 @@ public class AuthService(
         {
             return new LoginResult(LoginStatus.PersistenceFailure);
         }
+        finally
+        {
+            LogLoginPerformance(logger, "SaveChallenge", saveChallengeStopwatch);
+        }
 
         try
         {
             await emailService.SendOtpAsync(
-                new OtpEmailMessage(user.Email, creation.Otp, challenge.ExpiresAt),
+                new OtpEmailMessage(
+                    user.Email,
+                    creation.Otp,
+                    challenge.ExpiresAt,
+                    EnableLoginPerformanceLogging: true),
                 cancellationToken);
         }
         catch (EmailDeliveryException)
@@ -568,4 +606,16 @@ public class AuthService(
 
     private static bool IsUniqueEmailViolation(DbUpdateException exception) =>
         exception.InnerException is SqlException { Number: 2601 or 2627 };
+
+    private static void LogLoginPerformance(
+        ILogger<AuthService>? logger,
+        string stage,
+        Stopwatch stopwatch)
+    {
+        stopwatch.Stop();
+        logger?.LogInformation(
+            "LOGIN PERF {Stage}: {ElapsedMilliseconds}ms",
+            stage,
+            stopwatch.ElapsedMilliseconds);
+    }
 }
