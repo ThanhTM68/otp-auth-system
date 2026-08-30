@@ -51,7 +51,7 @@ public class OtpVerificationTests
         var second = await service.VerifyOtpAsync(new VerifyOtpRequest { ChallengeId = challenge.Id, Otp = "004821" });
 
         Assert.Equal(VerifyOtpStatus.Success, first.Status);
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, second.Status);
+        Assert.Equal(VerifyOtpStatus.NotCurrent, second.Status);
         Assert.Null(second.Response);
         Assert.NotNull((await context.OtpChallenges.SingleAsync()).ConsumedAt);
     }
@@ -88,10 +88,10 @@ public class OtpVerificationTests
         var correctAfterLock = await service.VerifyOtpAsync(new VerifyOtpRequest { ChallengeId = challenge.Id, Otp = "004821" });
 
         var persistedChallenge = await context.OtpChallenges.SingleAsync();
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, wrong.Status);
+        Assert.Equal(VerifyOtpStatus.MaxAttempts, wrong.Status);
         Assert.Equal((short)5, persistedChallenge.AttemptCount);
         Assert.True(persistedChallenge.IsRevoked);
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, correctAfterLock.Status);
+        Assert.Equal(VerifyOtpStatus.MaxAttempts, correctAfterLock.Status);
         Assert.Null(correctAfterLock.Response);
     }
 
@@ -106,7 +106,7 @@ public class OtpVerificationTests
         var result = await CreateAuthService(context, otpService).VerifyOtpAsync(
             new VerifyOtpRequest { ChallengeId = challenge.Id, Otp = "004821" });
 
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, result.Status);
+        Assert.Equal(VerifyOtpStatus.Expired, result.Status);
         Assert.Null(result.Response);
         Assert.Null((await context.OtpChallenges.SingleAsync()).ConsumedAt);
     }
@@ -123,13 +123,13 @@ public class OtpVerificationTests
             user,
             "004821",
             expiresAt: FixedNow.AddMinutes(2));
-        var timeProvider = new SequenceTimeProvider(FixedNow, challenge.ExpiresAt);
+        var timeProvider = new SequenceTimeProvider(FixedNow, challenge.ExpiresAt!.Value);
 
         var result = await CreateAuthService(context, otpService, timeProvider).VerifyOtpAsync(
             new VerifyOtpRequest { ChallengeId = challenge.Id, Otp = "004821" });
 
         var persistedChallenge = await context.OtpChallenges.SingleAsync();
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, result.Status);
+        Assert.Equal(VerifyOtpStatus.Expired, result.Status);
         Assert.Null(result.Response);
         Assert.Null(persistedChallenge.ConsumedAt);
         Assert.Equal((short)0, persistedChallenge.AttemptCount);
@@ -151,8 +151,29 @@ public class OtpVerificationTests
         var result = await CreateAuthService(context, otpService).VerifyOtpAsync(
             new VerifyOtpRequest { ChallengeId = challenge.Id, Otp = "004821" });
 
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, result.Status);
+        Assert.Equal(VerifyOtpStatus.NotCurrent, result.Status);
         Assert.Null(result.Response);
+    }
+
+    [Fact]
+    public async Task VerifyBeforeOtpWasSent_IsRejectedWithoutAttemptOrJwt()
+    {
+        await using var context = CreateContext();
+        var user = await AddUserAsync(context);
+        var pending = CreateOtpService().CreatePendingLoginChallenge(user, FixedNow.AddMinutes(-1));
+        context.OtpChallenges.Add(pending);
+        await context.SaveChangesAsync();
+        var jwtTokenService = new FakeJwtTokenService();
+        var service = CreateAuthService(context, CreateOtpService(), jwtTokenService: jwtTokenService);
+
+        var result = await service.VerifyOtpAsync(
+            new VerifyOtpRequest { ChallengeId = pending.Id, Otp = "004821" });
+
+        Assert.Equal(VerifyOtpStatus.NotSent, result.Status);
+        Assert.Null(result.Response);
+        Assert.Equal((short)0, pending.AttemptCount);
+        Assert.Null(pending.ConsumedAt);
+        Assert.Equal(0, jwtTokenService.CallCount);
     }
 
     [Fact]
@@ -200,14 +221,15 @@ public class OtpVerificationTests
     private static AuthService CreateAuthService(
         AppDbContext context,
         OtpService otpService,
-        TimeProvider? timeProvider = null) =>
+        TimeProvider? timeProvider = null,
+        IJwtTokenService? jwtTokenService = null) =>
         new(
             context,
             new PasswordHasher<User>(),
             timeProvider ?? new FixedTimeProvider(FixedNow),
             otpService,
             new FakeEmailService(),
-            new JwtTokenService(CreateJwtOptions(), JwtSigningKey),
+            jwtTokenService ?? new JwtTokenService(CreateJwtOptions(), JwtSigningKey),
             new FakeAuditService(context));
 
     private static OtpService CreateOtpService() =>
@@ -257,6 +279,7 @@ public class OtpVerificationTests
             AuthenticationFlowId = Guid.NewGuid(),
             Purpose = purpose,
             CreatedAt = FixedNow.AddMinutes(-1),
+            SentAt = FixedNow.AddMinutes(-1),
             ExpiresAt = expiresAt ?? FixedNow.AddMinutes(2),
             FlowExpiresAt = FixedNow.AddMinutes(9),
             AttemptCount = attemptCount,

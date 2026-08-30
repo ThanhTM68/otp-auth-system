@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi và quy ước
 
-Database dùng SQL Server, truy cập qua Entity Framework Core. Schema `Users`, `OtpChallenges`, `AuditLogs` đã được tạo bằng migration Phase 2; Phase 10 dùng nguyên `AuditLogs` schema nên không cần migration mới.
+Database dùng SQL Server, truy cập qua Entity Framework Core. Schema ban đầu `Users`, `OtpChallenges`, `AuditLogs` được tạo ở Phase 2. Refactor split-flow bổ sung migration `SupportPendingOtpChallenge`; migration cũ được giữ nguyên.
 
 Quy ước chung:
 
@@ -37,11 +37,12 @@ erDiagram
         uniqueidentifier Id PK
         uniqueidentifier UserId FK
         uniqueidentifier AuthenticationFlowId
-        varbinary OtpHash
+        varbinary OtpHash "nullable"
         varchar Purpose
         datetimeoffset CreatedAt
-        datetimeoffset ExpiresAt
+        datetimeoffset ExpiresAt "nullable"
         datetimeoffset FlowExpiresAt
+        datetimeoffset SentAt "nullable"
         datetimeoffset ConsumedAt "nullable"
         smallint AttemptCount
         smallint MaxAttempts
@@ -100,11 +101,12 @@ Unique index phải xử lý race của hai request đăng ký cùng email. Appl
 | `Id` | `uniqueidentifier` | Không | Không | Primary key và `challengeId` opaque trả cho client. |
 | `UserId` | `uniqueidentifier` | Không | Không | FK tới `Users.Id`; không lấy từ client khi verify/resend. |
 | `AuthenticationFlowId` | `uniqueidentifier` | Không | Không | ID giữ nguyên qua challenge đầu và tối đa 3 challenge resend. |
-| `OtpHash` | `varbinary(32)` | Không | Không | HMAC-SHA-256; tuyệt đối không lưu OTP plaintext. |
+| `OtpHash` | `varbinary(32)` | Có | `NULL` | HMAC-SHA-256 khi OTP đã được chuẩn bị; pending challenge chưa có OTP để hash. |
 | `Purpose` | `varchar(32)` | Không | Không | Hiện tại chỉ có mã cố định `LOGIN`. |
-| `CreatedAt` | `datetimeoffset(7)` | Không | Không | Thời điểm issue/persist challenge theo UTC; là mốc cooldown, không tuyên bố thời điểm email đã đến. |
-| `ExpiresAt` | `datetimeoffset(7)` | Không | Không | `min(CreatedAt + 3 phút, FlowExpiresAt)`. |
+| `CreatedAt` | `datetimeoffset(7)` | Không | Không | Thời điểm tạo challenge/pre-auth flow theo UTC. |
+| `ExpiresAt` | `datetimeoffset(7)` | Có | `NULL` | Hạn OTP; null ở pending, được tính khi OTP được chuẩn bị. |
 | `FlowExpiresAt` | `datetimeoffset(7)` | Không | Không | Hạn tuyệt đối của password step, mặc định 10 phút từ challenge đầu. |
+| `SentAt` | `datetimeoffset(7)` | Có | `NULL` | Chỉ được set sau SMTP success; là mốc cooldown và bằng chứng OTP đã thực sự gửi. |
 | `ConsumedAt` | `datetimeoffset(7)` | Có | `NULL` | Được set đúng một lần khi verify thành công. |
 | `AttemptCount` | `smallint` | Không | `0` | Số lần OTP đúng format nhưng không khớp. |
 | `MaxAttempts` | `smallint` | Không | `5` | Tối đa 5 lần sai theo SR-13. |
@@ -112,10 +114,10 @@ Unique index phải xử lý race của hai request đăng ký cùng email. Appl
 | `IsRevoked` | `bit` | Không | `0` | Vô hiệu do login/resend mới, đạt max attempts hoặc delivery failure. |
 | `RowVersion` | `rowversion` | Không | SQL Server | Chống lost update, double consume và race với resend. |
 
-Không cần lưu OTP plaintext, thời điểm resend riêng hoặc cờ `IsExpired`:
+Không cần lưu OTP plaintext hoặc cờ `IsExpired`:
 
-- Cooldown được tính từ `CreatedAt` của open challenge hiện tại.
-- Expiration là trạng thái dẫn xuất từ `now >= ExpiresAt`; không lưu một cờ dễ bị sai lệch.
+- Cooldown được tính từ `SentAt` của sent challenge hiện tại.
+- Expiration là trạng thái dẫn xuất từ `ExpiresAt`; pending chưa có expiration OTP.
 - `FlowExpiresAt` và `ResendCount` ngăn resend kéo dài password step vô hạn; resend copy flow ID/hạn cũ và tăng count.
 - Nguyên nhân revoke được ghi bằng audit `EventType`/`ReasonCode` thay vì thêm nhiều cờ trạng thái.
 
@@ -139,7 +141,7 @@ OtpHash = HMAC-SHA-256(
 
 - `PK_OtpChallenges` trên `Id`.
 - `FK_OtpChallenges_Users_UserId`: `UserId -> Users.Id`, delete behavior `NO ACTION`.
-- Index `IX_OtpChallenges_UserId_Purpose_CreatedAt` trên `(UserId, Purpose, CreatedAt DESC, Id DESC)` để tra cứu lịch sử/cooldown có tie-breaker xác định.
+- Index `IX_OtpChallenges_UserId_Purpose_CreatedAt` trên `(UserId, Purpose, CreatedAt DESC)` để tra cứu lịch sử.
 - Index `IX_OtpChallenges_AuthenticationFlowId_CreatedAt` trên `(AuthenticationFlowId, CreatedAt)` để audit một flow.
 - Filtered unique index `UX_OtpChallenges_UserId_Purpose_Open` trên `(UserId, Purpose)` với filter:
 
@@ -149,29 +151,28 @@ WHERE IsRevoked = 0 AND ConsumedAt IS NULL
 
 Filtered index không thể dùng đồng hồ hiện tại, vì vậy challenge đã hết hạn nhưng chưa revoke vẫn được coi là “open” đối với index. Login/resend phải revoke row open cũ trong cùng transaction trước khi insert row mới.
 
-Check constraint đề xuất:
+Check constraint đã hiện thực trong model/migration:
 
 ```text
 Purpose IN ('LOGIN')
-ExpiresAt > CreatedAt
-ExpiresAt <= DATEADD(minute, 3, CreatedAt)
-ExpiresAt <= FlowExpiresAt
-FlowExpiresAt <= DATEADD(minute, 10, CreatedAt)
-DATALENGTH(OtpHash) = 32
+ExpiresAt IS NULL OR (ExpiresAt > CreatedAt AND ExpiresAt <= FlowExpiresAt)
+(OtpHash IS NULL AND ExpiresAt IS NULL AND SentAt IS NULL)
+OR (OtpHash IS NOT NULL AND DATALENGTH(OtpHash) = 32 AND ExpiresAt IS NOT NULL
+    AND (SentAt IS NULL OR (SentAt >= CreatedAt AND SentAt < ExpiresAt)))
 AttemptCount >= 0 AND AttemptCount <= MaxAttempts
 MaxAttempts >= 1 AND MaxAttempts <= 5
 ResendCount >= 0 AND ResendCount <= 3
-AttemptCount < MaxAttempts OR IsRevoked = 1
-ConsumedAt IS NULL OR (ConsumedAt >= CreatedAt AND ConsumedAt < ExpiresAt)
-NOT (ConsumedAt IS NOT NULL AND IsRevoked = 1)
+ConsumedAt IS NULL OR (SentAt IS NOT NULL AND ConsumedAt >= SentAt AND ConsumedAt < ExpiresAt)
 ```
 
-Giới hạn `MaxAttempts <= 5` bảo đảm cấu hình không vô tình yếu hơn SR-13. Khi cần thêm purpose trong tương lai phải dùng migration cập nhật constraint.
+Giới hạn `MaxAttempts <= 5` bảo đảm cấu hình không vô tình yếu hơn SR-13. Các invariant `FlowExpiresAt <= CreatedAt + 10 phút`, đạt max-attempt thì phải revoke, và tổ hợp consumed/revoked hiện vẫn do service enforce; đây là phần defense-in-depth còn lại trong `SECURITY_REVIEW.md`. Khi cần thêm purpose phải dùng migration cập nhật constraint.
 
 ### 4.4. Trạng thái challenge
 
 | Trạng thái logic | Điều kiện | Có thể verify? | Có thể resend? |
 |---|---|---:|---:|
+| Pending | `OtpHash`, `ExpiresAt`, `SentAt` đều null; password đã đúng nhưng chưa bấm gửi | Không | Không; chỉ first send |
+| Prepared | Có `OtpHash`/`ExpiresAt`, `SentAt` null trong khi delivery/finalize | Không | Không |
 | Usable, còn lượt resend | Chưa revoke/consume/khóa; `now < ExpiresAt`, `now < FlowExpiresAt`, `ResendCount < 3` | Có | Có sau cooldown/rate limit |
 | Usable, đã hết lượt resend | Chưa revoke/consume/khóa; `now < ExpiresAt`, `now < FlowExpiresAt`, `ResendCount = 3` | Có | Không |
 | OTP expired, còn lượt resend | Chưa revoke/consume/khóa; `now >= ExpiresAt`, `now < FlowExpiresAt`, `ResendCount < 3` | Không | Có sau cooldown/rate limit |
@@ -185,10 +186,12 @@ Khi nhiều điều kiện cùng đúng, trạng thái terminal `Consumed/Revoke
 Các chuyển trạng thái hợp lệ:
 
 ```text
-Created -> Consumed                      (OTP đúng)
-Created -> Revoked                       (resend/login mới/delivery failure)
-Created -> Revoked at AttemptCount = 5   (quá nhiều OTP sai)
-Created -> OTP Expired -> Revoked        (resend trong flow hoặc cleanup)
+Pending -> Prepared                      (first send bắt đầu)
+Prepared -> Sent                         (SMTP và finalize thành công)
+Pending/Prepared/Sent -> Revoked         (login mới/delivery failure)
+Sent -> Consumed                         (OTP đúng)
+Sent -> Revoked at AttemptCount = 5      (quá nhiều OTP sai)
+Sent -> OTP Expired -> Revoked           (resend trong flow hoặc cleanup)
 Flow Expired -> Revoked                  (login mới hoặc cleanup)
 ```
 
@@ -234,7 +237,9 @@ Không thêm cột `Details`, `Message` hoặc JSON tự do ở thiết kế ban
 | `REGISTER_SUCCESS` | `true` | User được tạo thành công. |
 | `LOGIN_PASSWORD_SUCCESS` | `true` | Email/password đúng, trước bước OTP. |
 | `LOGIN_PASSWORD_FAILED` | `false` | Email/password sai hoặc tài khoản inactive; response client vẫn giống nhau. |
-| `OTP_CREATED` | `true` | Challenge mới đã được lưu; không ghi OTP. |
+| `OTP_SEND_REQUESTED` | `true` | First-send hợp lệ bắt đầu; không ghi OTP/email đầy đủ. |
+| `OTP_CREATED` | `true` | OTP HMAC/expiration đã được persist; không ghi OTP. |
+| `OTP_SENT` | `true` | SMTP thành công và `SentAt` đã được commit. |
 | `OTP_VERIFY_FAILED` | `false` | OTP không khớp hoặc challenge bị replay/revoke/lock/not found; expired dùng event riêng. |
 | `OTP_EXPIRED` | `false` | Verify challenge tại/sau `ExpiresAt`. |
 | `OTP_VERIFY_SUCCESS` | `true` | `ConsumedAt` được commit thành công. |
@@ -250,38 +255,40 @@ Khi client gửi một challenge ID không tồn tại, audit dùng `ReasonCode 
 
 Transaction chứa insert User và `REGISTER_SUCCESS`. Unique index xử lý hai register đồng thời. Không ghi audit success nếu transaction User không commit.
 
-### 6.2. Login password đúng / tạo challenge
+### 6.2. Login password đúng / tạo pending challenge
 
 Trong transaction ngắn với isolation phù hợp:
 
 1. Revoke mọi open `LOGIN` challenge của User.
-2. Insert challenge mới.
-3. Insert `OTP_CREATED`.
-4. Commit.
+2. Insert pending challenge mới với `OtpHash`, `ExpiresAt`, `SentAt` đều null.
+3. Insert `LOGIN_PASSWORD_SUCCESS`.
+4. Commit và trả response; không gọi SMTP/JWT.
 
-`LOGIN_PASSWORD_SUCCESS` được ghi ngay sau khi password verify đúng, trước khi kiểm tra quota phát OTP, để một password success bị rate-limit vẫn có audit đúng SR-22. Nếu audit insert này thất bại, operation dừng an toàn và không phát OTP. Sau challenge commit mới gửi SMTP. SMTP timeout phải ngắn hơn đáng kể OTP TTL. Trước response thành công, service kiểm tra lại `now < ExpiresAt` và `now < FlowExpiresAt`. Nếu delivery thất bại/timeout hoặc challenge không còn usable, service trả lỗi và thực hiện best-effort transaction bù để revoke challenge/ghi `OTP_DELIVERY_FAILED`. Process crash hoặc compensation conflict có thể để row open tới TTL/flow expiry; đây là giới hạn reliability đã biết, không phải lý do giữ DB transaction khi chờ network.
+### 6.3. Gửi OTP lần đầu
 
-### 6.3. Verify OTP sai
+Chỉ pending challenge hợp lệ được chuyển sang prepared. Server sinh OTP/HMAC và expiration, persist prepared state cùng `OTP_SEND_REQUESTED`/`OTP_CREATED`, gọi SMTP ngoài transaction, rồi chỉ sau success mới set `SentAt` và ghi `OTP_SENT`. Nếu SMTP hoặc finalize thất bại, operation fail closed/revoke và ghi `OTP_DELIVERY_FAILED`; client không nhận success giả. Gọi first-send lần hai không được chuyển thành resend.
+
+### 6.4. Verify OTP sai
 
 - Tăng `AttemptCount`, set revoke khi đạt max và ghi audit trong một transaction ngắn có `RowVersion` optimistic concurrency.
 - Mỗi request OTP sai hợp lệ phải được tính đúng một lần; không được lost update.
 - Khi tăng từ 4 lên 5, đồng thời đặt `IsRevoked = 1` và ghi audit.
 - Khi gặp concurrency conflict, rollback, reload và đánh giá lại toàn bộ state với cùng request; tiếp tục tới khi update commit, challenge đã terminal hoặc request bị hủy. Không tự coi là thành công và không để lost update.
 
-### 6.4. Verify OTP đúng
+### 6.5. Verify OTP đúng
 
 Conditional update chỉ được thành công nếu challenge vẫn chưa consumed/revoked, attempts dưới max, chưa hết hạn, đúng purpose và User active. `ConsumedAt` cùng `OTP_VERIFY_SUCCESS` được commit trong một transaction. JWT chỉ được tạo/trả sau commit; concurrency loser không được cấp token.
 
-### 6.5. Resend
+### 6.6. Resend
 
 Trong transaction ngắn:
 
 1. Xác nhận request trỏ tới open challenge hiện tại và trạng thái cho phép resend.
-2. Kiểm tra cooldown/rate-limit dựa trên server state.
+2. Yêu cầu challenge đã sent và kiểm tra cooldown/rate-limit từ `SentAt`.
 3. Revoke challenge cũ.
-4. Insert challenge mới với OTP HMAC hoàn toàn mới; copy `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, và cắt `ExpiresAt` tại flow expiry.
-5. Sau delivery thành công, ghi `OTP_RESEND_SUCCESS` và `OTP_CREATED`; nếu delivery fail thì ghi `OTP_RESEND_FAILED` với mã lý do an toàn.
-6. Commit rồi gửi SMTP; sau SMTP, recheck `now < ExpiresAt`, `now < FlowExpiresAt` và challenge vẫn open trước response `200`.
+4. Insert prepared replacement với OTP HMAC hoàn toàn mới; copy `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, và cắt `ExpiresAt` tại flow expiry.
+5. Commit prepared replacement/`OTP_CREATED` rồi gửi SMTP; sau delivery thành công set `SentAt` và ghi `OTP_SENT`/`OTP_RESEND_SUCCESS`.
+6. Nếu delivery/finalize fail, ghi `OTP_RESEND_FAILED`/`OTP_DELIVERY_FAILED` và fail closed; challenge cũ vẫn bị revoke để OTP cũ không hồi sinh.
 
 `Serializable` cho đoạn revoke/insert ngắn, `RowVersion` và filtered unique index tạo ba lớp bảo vệ dễ giải thích cho bản demo. Unique/concurrency exception phải được ánh xạ sang lỗi an toàn, không trả SQL detail.
 
@@ -296,13 +303,16 @@ Purpose == LOGIN
 AND IsRevoked == false
 AND ConsumedAt == null
 AND AttemptCount < MaxAttempts
+AND OtpHash != null
+AND SentAt != null
+AND ExpiresAt != null
 AND now < ExpiresAt
 AND now < FlowExpiresAt
 AND User.IsActive == true
 ```
 
 - `challengeId` là identifier khó đoán, không phải secret thay thế OTP.
-- Địa chỉ email nhận OTP luôn lấy qua quan hệ `OtpChallenge.User.Email` hoặc User vừa verify password.
+- Địa chỉ email nhận OTP luôn lấy qua quan hệ `OtpChallenge.User.Email`; `/send-otp` và `/resend-otp` không nhận email quyết định người nhận.
 - Không dựa vào thứ tự `Id` để xác định mới nhất; dùng `CreatedAt` và điều kiện open.
 
 ## 8. Bảo vệ dữ liệu
@@ -331,9 +341,9 @@ SQL Server backup và connection cũng cần encryption/quyền truy cập phù 
 
 - SR-01..03: `Users` chỉ có `PasswordHash`, không có password/log plaintext.
 - SR-04..07: OTP 6 số do CSPRNG; chỉ HMAC được lưu; schema audit không có OTP.
-- SR-08..12: `ExpiresAt`, `ConsumedAt`, `RowVersion` và conditional transaction bảo đảm expiration/single-use/replay protection.
+- SR-08..12: `SentAt`, `ExpiresAt`, `ConsumedAt`, `RowVersion` và conditional transaction bảo đảm chỉ mã đã gửi mới verify, expiration/single-use/replay protection.
 - SR-13..14: `AttemptCount`, `MaxAttempts <= 5`, revoke khi đạt 5.
-- SR-15..17: resend tạo row mới, revoke row cũ, `CreatedAt` làm mốc cooldown 60 giây; flow expiry/resend count là lớp bổ sung chống kéo dài vô hạn.
+- SR-15..17: resend tạo row mới, revoke row cũ, `SentAt` làm mốc cooldown 60 giây; flow expiry/resend count là lớp bổ sung chống kéo dài vô hạn.
 - SR-18: index hỗ trợ partition/check nhanh; rate limiter nằm ở application.
 - SR-19..21: database không cấp token; `ConsumedAt` commit là điều kiện cho JwtTokenService.
 - SR-22..23: `AuditLogs` hỗ trợ đủ event và không có cột secret/raw payload.
@@ -346,6 +356,7 @@ SQL Server backup và connection cũng cần encryption/quyền truy cập phù 
 - Bổ sung `RowVersion` cho User/challenge để xử lý optimistic concurrency.
 - Bổ sung `AuthenticationFlowId`, `FlowExpiresAt` 10 phút và `ResendCount` tối đa 3 cho resend an toàn.
 - Dùng `varbinary(32)` HMAC-SHA-256 có key riêng cho OTP.
+- Migration `SupportPendingOtpChallenge` làm `OtpHash`/`ExpiresAt` nullable, thêm `SentAt`, backfill row OTP cũ bằng `SentAt = CreatedAt` và cập nhật state constraints; migration cũ không bị sửa.
 - Chỉ một open challenge trên mỗi `(UserId, Purpose)`.
 - Expired là trạng thái dẫn xuất; khi tạo mới phải revoke open row cũ.
 - Resend tạo row mới thay vì tái sử dụng/cập nhật OTP hash của row cũ, giúp audit và chống mã cũ rõ ràng.

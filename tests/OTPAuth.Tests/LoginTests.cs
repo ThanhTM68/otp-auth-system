@@ -13,11 +13,13 @@ namespace OTPAuth.Tests;
 public class LoginTests
 {
     [Fact]
-    public async Task ValidCredentials_CreateHashedLoginChallengeWithoutToken()
+    public async Task ValidCredentials_CreatePendingChallengeWithoutEmailOrToken()
     {
         await using var context = CreateContext();
         await AddUserAsync(context, "student@example.com", "ValidPassword123!", isActive: true);
-        var service = CreateService(context);
+        var emailService = new FakeEmailService();
+        var jwtTokenService = new FakeJwtTokenService();
+        var service = CreateService(context, emailService, jwtTokenService);
 
         var result = await service.LoginAsync(new LoginRequest
         {
@@ -30,14 +32,22 @@ public class LoginTests
         Assert.Equal(LoginStatus.Success, result.Status);
         Assert.NotNull(result.Response);
         Assert.True(result.Response!.RequiresOtp);
+        Assert.False(result.Response.OtpSent);
+        Assert.StartsWith("st", result.Response.MaskedEmail, StringComparison.Ordinal);
+        Assert.EndsWith("@example.com", result.Response.MaskedEmail, StringComparison.Ordinal);
+        Assert.Contains('*', result.Response.MaskedEmail);
+        Assert.NotEqual("student@example.com", result.Response.MaskedEmail);
         Assert.Equal(challenge.Id, result.Response.ChallengeId);
         Assert.Equal("LOGIN", challenge.Purpose);
-        Assert.Equal(32, challenge.OtpHash.Length);
-        Assert.Equal(TimeSpan.FromMinutes(3), challenge.ExpiresAt - challenge.CreatedAt);
+        Assert.Null(challenge.OtpHash);
+        Assert.Null(challenge.SentAt);
+        Assert.Null(challenge.ExpiresAt);
         Assert.Equal((short)0, challenge.AttemptCount);
         Assert.Equal((short)5, challenge.MaxAttempts);
         Assert.Null(challenge.ConsumedAt);
         Assert.False(challenge.IsRevoked);
+        Assert.Equal(0, emailService.CallCount);
+        Assert.Equal(0, jwtTokenService.CallCount);
         Assert.Null(typeof(LoginResponse).GetProperty("AccessToken"));
         Assert.Null(typeof(OtpChallenge).GetProperty("Otp"));
     }
@@ -127,8 +137,18 @@ public class LoginTests
         return new AppDbContext(options);
     }
 
-    private static AuthService CreateService(AppDbContext context) =>
-        new(context, new PasswordHasher<User>(), TimeProvider.System, CreateOtpService(), new FakeEmailService(), new FakeJwtTokenService(), new FakeAuditService(context));
+    private static AuthService CreateService(
+        AppDbContext context,
+        IEmailService? emailService = null,
+        IJwtTokenService? jwtTokenService = null) =>
+        new(
+            context,
+            new PasswordHasher<User>(),
+            TimeProvider.System,
+            CreateOtpService(),
+            emailService ?? new FakeEmailService(),
+            jwtTokenService ?? new FakeJwtTokenService(),
+            new FakeAuditService(context));
 
     private static async Task<User> AddUserAsync(AppDbContext context, string email, string password, bool isActive)
     {

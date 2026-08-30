@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Hosting;
@@ -42,8 +43,39 @@ public class SecurityApiTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("requiresOtp", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"otpSent\":false", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("maskedEmail", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"expiresAt\"", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("student@example.com", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("accessToken", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("token", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SendOtp_ResponseContainsOnlySafeChallengeMetadata()
+    {
+        using var factory = new SecurityWebApplicationFactory();
+        await AddActiveUserAsync(factory);
+        using var client = CreateHttpsClient(factory);
+        using var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            email = "student@example.com",
+            password = "ValidPassword123!"
+        });
+        using var loginJson = JsonDocument.Parse(await loginResponse.Content.ReadAsStringAsync());
+        var challengeId = loginJson.RootElement.GetProperty("challengeId").GetGuid();
+
+        using var response = await client.PostAsJsonAsync("/api/auth/send-otp", new { challengeId });
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("\"otpSent\":true", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("expiresAt", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("resendAvailableAt", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("student@example.com", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("accessToken", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("otpHash", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("004821", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -314,6 +346,14 @@ public class SecurityApiTests
         Assert.Equal(["ChallengeId", "Otp"], requestProperties.OrderBy(name => name));
     }
 
+    [Fact]
+    public void SendOtpRequest_AcceptsOnlyServerIssuedChallengeId()
+    {
+        var requestProperties = typeof(SendOtpRequest).GetProperties().Select(property => property.Name);
+
+        Assert.Equal(["ChallengeId"], requestProperties.OrderBy(name => name));
+    }
+
     private static HttpClient CreateHttpsClient(WebApplicationFactory<global::Program> factory) =>
         factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -382,6 +422,11 @@ public class SecurityApiTests
 
         public Task<VerifyOtpResult> VerifyOtpAsync(
             VerifyOtpRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw exception;
+
+        public Task<SendOtpResult> SendOtpAsync(
+            SendOtpRequest request,
             CancellationToken cancellationToken = default) =>
             throw exception;
 

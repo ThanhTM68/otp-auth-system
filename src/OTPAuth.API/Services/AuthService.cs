@@ -4,7 +4,6 @@ using Microsoft.EntityFrameworkCore;
 using OTPAuth.API.Data;
 using OTPAuth.API.DTOs;
 using OTPAuth.API.Entities;
-using System.Diagnostics;
 
 namespace OTPAuth.API.Services;
 
@@ -12,6 +11,7 @@ public interface IAuthService
 {
     Task<RegistrationResult> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
     Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
+    Task<SendOtpResult> SendOtpAsync(SendOtpRequest request, CancellationToken cancellationToken = default);
     Task<VerifyOtpResult> VerifyOtpAsync(VerifyOtpRequest request, CancellationToken cancellationToken = default);
     Task<ResendOtpResult> ResendOtpAsync(ResendOtpRequest request, CancellationToken cancellationToken = default);
     Task<CurrentUserResponse?> GetActiveUserAsync(Guid userId, CancellationToken cancellationToken = default);
@@ -30,16 +30,29 @@ public enum LoginStatus
 {
     Success,
     InvalidCredentials,
-    EmailDeliveryFailure,
     PersistenceFailure
 }
 
 public sealed record LoginResult(LoginStatus Status, LoginResponse? Response = null);
 
+public enum SendOtpStatus
+{
+    Success,
+    NotAvailable,
+    EmailDeliveryFailure,
+    PersistenceFailure
+}
+
+public sealed record SendOtpResult(SendOtpStatus Status, SendOtpResponse? Response = null);
+
 public enum VerifyOtpStatus
 {
     Success,
     VerificationFailed,
+    Expired,
+    NotCurrent,
+    MaxAttempts,
+    NotSent,
     PersistenceFailure
 }
 
@@ -66,8 +79,7 @@ public class AuthService(
     IOtpService otpService,
     IEmailService emailService,
     IJwtTokenService jwtTokenService,
-    IAuditService auditService,
-    ILogger<AuthService>? logger = null) : IAuthService
+    IAuditService auditService) : IAuthService
 {
     private readonly string dummyPasswordHash = passwordHasher.HashPassword(
         new User(),
@@ -119,32 +131,14 @@ public class AuthService(
     public async Task<LoginResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
         var normalizedEmail = EmailNormalizer.Normalize(request.Email!);
-        User? user;
-        var findUserStopwatch = Stopwatch.StartNew();
-        try
-        {
-            user = await dbContext.Users.SingleOrDefaultAsync(
-                candidate => candidate.NormalizedEmail == normalizedEmail,
-                cancellationToken);
-        }
-        finally
-        {
-            LogLoginPerformance(logger, "FindUser", findUserStopwatch);
-        }
+        var user = await dbContext.Users.SingleOrDefaultAsync(
+            candidate => candidate.NormalizedEmail == normalizedEmail,
+            cancellationToken);
 
-        PasswordVerificationResult passwordVerification;
-        var verifyPasswordStopwatch = Stopwatch.StartNew();
-        try
-        {
-            passwordVerification = passwordHasher.VerifyHashedPassword(
-                user ?? new User(),
-                user?.PasswordHash ?? dummyPasswordHash,
-                request.Password!);
-        }
-        finally
-        {
-            LogLoginPerformance(logger, "VerifyPassword", verifyPasswordStopwatch);
-        }
+        var passwordVerification = passwordHasher.VerifyHashedPassword(
+            user ?? new User(),
+            user?.PasswordHash ?? dummyPasswordHash,
+            request.Password!);
 
         if (user is null || !user.IsActive || passwordVerification == PasswordVerificationResult.Failed)
         {
@@ -163,83 +157,45 @@ public class AuthService(
                 challenge.ConsumedAt == null)
             .ToListAsync(cancellationToken);
 
-        foreach (var openChallenge in openChallenges)
-        {
-            otpService.RevokeChallenge(openChallenge);
-        }
-
-        OtpChallengeCreation creation;
-        var createChallengeStopwatch = Stopwatch.StartNew();
+        OtpChallenge challenge;
         try
         {
-            creation = otpService.CreateLoginChallenge(user, timeProvider.GetUtcNow());
-        }
-        finally
-        {
-            LogLoginPerformance(logger, "CreateChallenge", createChallengeStopwatch);
-        }
-        var challenge = creation.Challenge;
-        dbContext.OtpChallenges.Add(challenge);
-        auditService.Record(new AuditEvent(AuditEventTypes.LoginPasswordSuccess, true, UserId: user.Id));
-        auditService.Record(new AuditEvent(AuditEventTypes.OtpCreated, true, user.Id, challenge.Id));
+            await using var transaction = dbContext.Database.IsRelational()
+                ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+                : null;
 
-        var saveChallengeStopwatch = Stopwatch.StartNew();
-        try
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException)
-        {
-            return new LoginResult(LoginStatus.PersistenceFailure);
-        }
-        finally
-        {
-            LogLoginPerformance(logger, "SaveChallenge", saveChallengeStopwatch);
-        }
+            foreach (var openChallenge in openChallenges)
+            {
+                otpService.RevokeChallenge(openChallenge);
+            }
 
-        try
-        {
-            await emailService.SendOtpAsync(
-                new OtpEmailMessage(
-                    user.Email,
-                    creation.Otp,
-                    challenge.ExpiresAt,
-                    EnableLoginPerformanceLogging: true),
-                cancellationToken);
-        }
-        catch (EmailDeliveryException)
-        {
-            otpService.RevokeChallenge(challenge);
-            auditService.Record(new AuditEvent(
-                AuditEventTypes.OtpDeliveryFailed,
-                false,
-                user.Id,
-                challenge.Id,
-                AuditReasonCodes.DeliveryFailed));
-
-            try
+            if (openChallenges.Count > 0)
             {
                 await dbContext.SaveChangesAsync(cancellationToken);
             }
-            catch (DbUpdateException)
+
+            challenge = otpService.CreatePendingLoginChallenge(user, timeProvider.GetUtcNow());
+            dbContext.OtpChallenges.Add(challenge);
+            auditService.Record(new AuditEvent(
+                AuditEventTypes.LoginPasswordSuccess,
+                true,
+                UserId: user.Id));
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            if (transaction is not null)
             {
-                return new LoginResult(LoginStatus.PersistenceFailure);
+                await transaction.CommitAsync(cancellationToken);
             }
-
-            return new LoginResult(LoginStatus.EmailDeliveryFailure);
         }
-
-        if (!await IsChallengeUsableAfterDeliveryAsync(challenge.Id, cancellationToken))
+        catch (DbUpdateConcurrencyException)
         {
-            var revoked = await RevokeAfterFailedDeliveryAsync(challenge.Id, cancellationToken);
-            await auditService.TryRecordAsync(new AuditEvent(
-                AuditEventTypes.OtpDeliveryFailed,
-                false,
-                challenge.UserId,
-                challenge.Id,
-                AuditReasonCodes.DeliveryFailed), cancellationToken);
-            return new LoginResult(
-                revoked ? LoginStatus.EmailDeliveryFailure : LoginStatus.PersistenceFailure);
+            dbContext.ChangeTracker.Clear();
+            return new LoginResult(LoginStatus.PersistenceFailure);
+        }
+        catch (DbUpdateException)
+        {
+            dbContext.ChangeTracker.Clear();
+            return new LoginResult(LoginStatus.PersistenceFailure);
         }
 
         return new LoginResult(
@@ -248,9 +204,96 @@ public class AuthService(
                 RequiresOtp: true,
                 ChallengeId: challenge.Id,
                 Purpose: challenge.Purpose,
-                ExpiresAt: challenge.ExpiresAt,
-                FlowExpiresAt: challenge.FlowExpiresAt,
-                ResendAvailableAt: otpService.GetResendAvailableAt(challenge)));
+                OtpSent: false,
+                MaskedEmail: MaskEmail(user.Email),
+                FlowExpiresAt: challenge.FlowExpiresAt));
+    }
+
+    public async Task<SendOtpResult> SendOtpAsync(
+        SendOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var challenge = await dbContext.OtpChallenges
+            .Include(candidate => candidate.User)
+            .SingleOrDefaultAsync(candidate => candidate.Id == request.ChallengeId, cancellationToken);
+        var now = timeProvider.GetUtcNow();
+
+        if (challenge is null || challenge.User is null || !challenge.User.IsActive ||
+            challenge.Purpose != "LOGIN" || challenge.IsRevoked || challenge.ConsumedAt is not null ||
+            now >= challenge.FlowExpiresAt || !otpService.IsPending(challenge))
+        {
+            return new SendOtpResult(SendOtpStatus.NotAvailable);
+        }
+
+        OtpChallengeCreation creation;
+        try
+        {
+            creation = otpService.PrepareFirstSend(challenge, now);
+            auditService.Record(new AuditEvent(
+                AuditEventTypes.OtpSendRequested,
+                true,
+                challenge.UserId,
+                challenge.Id));
+            auditService.Record(new AuditEvent(
+                AuditEventTypes.OtpCreated,
+                true,
+                challenge.UserId,
+                challenge.Id));
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            dbContext.ChangeTracker.Clear();
+            return new SendOtpResult(SendOtpStatus.NotAvailable);
+        }
+        catch (DbUpdateException)
+        {
+            return new SendOtpResult(SendOtpStatus.PersistenceFailure);
+        }
+
+        try
+        {
+            await emailService.SendOtpAsync(
+                new OtpEmailMessage(challenge.User.Email, creation.Otp, challenge.ExpiresAt!.Value),
+                cancellationToken);
+        }
+        catch (EmailDeliveryException)
+        {
+            var revoked = await RevokeAfterFailedDeliveryAsync(challenge.Id, cancellationToken);
+            await auditService.TryRecordAsync(new AuditEvent(
+                AuditEventTypes.OtpDeliveryFailed,
+                false,
+                challenge.UserId,
+                challenge.Id,
+                AuditReasonCodes.DeliveryFailed), cancellationToken);
+            return new SendOtpResult(
+                revoked ? SendOtpStatus.EmailDeliveryFailure : SendOtpStatus.PersistenceFailure);
+        }
+
+        var sentChallenge = await MarkChallengeSentAsync(challenge.Id, cancellationToken);
+        if (sentChallenge is null)
+        {
+            var revoked = await RevokeAfterFailedDeliveryAsync(challenge.Id, cancellationToken);
+            await auditService.TryRecordAsync(new AuditEvent(
+                AuditEventTypes.OtpDeliveryFailed,
+                false,
+                challenge.UserId,
+                challenge.Id,
+                AuditReasonCodes.DeliveryFailed), cancellationToken);
+            return new SendOtpResult(
+                revoked ? SendOtpStatus.EmailDeliveryFailure : SendOtpStatus.PersistenceFailure);
+        }
+
+        return new SendOtpResult(
+            SendOtpStatus.Success,
+            new SendOtpResponse(
+                sentChallenge.Id,
+                sentChallenge.Purpose,
+                OtpSent: true,
+                MaskedEmail: MaskEmail(sentChallenge.User.Email),
+                ExpiresAt: sentChallenge.ExpiresAt!.Value,
+                FlowExpiresAt: sentChallenge.FlowExpiresAt,
+                ResendAvailableAt: otpService.GetResendAvailableAt(sentChallenge)));
     }
 
     public async Task<VerifyOtpResult> VerifyOtpAsync(
@@ -297,6 +340,17 @@ public class AuthService(
                 return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
             }
 
+            if (!otpService.HasBeenSent(challenge))
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    AuditReasonCodes.OtpNotSent), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.NotSent);
+            }
+
             if (challenge.ConsumedAt is not null)
             {
                 await auditService.TryRecordAsync(new AuditEvent(
@@ -304,10 +358,10 @@ public class AuthService(
                     false,
                     challenge.UserId,
                     challenge.Id), cancellationToken);
-                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+                return new VerifyOtpResult(VerifyOtpStatus.NotCurrent);
             }
 
-            if (now >= challenge.ExpiresAt || now >= challenge.FlowExpiresAt)
+            if (otpService.IsExpired(challenge, now) || now >= challenge.FlowExpiresAt)
             {
                 await auditService.TryRecordAsync(new AuditEvent(
                     AuditEventTypes.OtpExpired,
@@ -315,24 +369,35 @@ public class AuthService(
                     challenge.UserId,
                     challenge.Id,
                     now >= challenge.FlowExpiresAt ? AuditReasonCodes.FlowExpired : AuditReasonCodes.OtpExpired), cancellationToken);
-                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+                return new VerifyOtpResult(VerifyOtpStatus.Expired);
             }
 
-            if (challenge.IsRevoked || !otpService.CanAttempt(challenge))
+            if (!otpService.CanAttempt(challenge))
             {
                 await auditService.TryRecordAsync(new AuditEvent(
                     AuditEventTypes.OtpVerifyFailed,
                     false,
                     challenge.UserId,
                     challenge.Id,
-                    challenge.IsRevoked ? AuditReasonCodes.ChallengeRevoked : AuditReasonCodes.ChallengeLocked), cancellationToken);
-                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+                    AuditReasonCodes.ChallengeLocked), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.MaxAttempts);
+            }
+
+            if (challenge.IsRevoked)
+            {
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpVerifyFailed,
+                    false,
+                    challenge.UserId,
+                    challenge.Id,
+                    AuditReasonCodes.ChallengeRevoked), cancellationToken);
+                return new VerifyOtpResult(VerifyOtpStatus.NotCurrent);
             }
 
             var otpMatches = otpService.VerifyOtp(challenge, request.Otp!);
             now = timeProvider.GetUtcNow();
 
-            if (now >= challenge.ExpiresAt || now >= challenge.FlowExpiresAt)
+            if (otpService.IsExpired(challenge, now) || now >= challenge.FlowExpiresAt)
             {
                 await auditService.TryRecordAsync(new AuditEvent(
                     AuditEventTypes.OtpExpired,
@@ -340,7 +405,7 @@ public class AuthService(
                     challenge.UserId,
                     challenge.Id,
                     now >= challenge.FlowExpiresAt ? AuditReasonCodes.FlowExpired : AuditReasonCodes.OtpExpired), cancellationToken);
-                return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+                return new VerifyOtpResult(VerifyOtpStatus.Expired);
             }
 
             if (!otpMatches)
@@ -365,7 +430,10 @@ public class AuthService(
                 try
                 {
                     await dbContext.SaveChangesAsync(cancellationToken);
-                    return new VerifyOtpResult(VerifyOtpStatus.VerificationFailed);
+                    return new VerifyOtpResult(
+                        otpService.CanAttempt(challenge)
+                            ? VerifyOtpStatus.VerificationFailed
+                            : VerifyOtpStatus.MaxAttempts);
                 }
                 catch (DbUpdateConcurrencyException)
                 {
@@ -417,11 +485,11 @@ public class AuthService(
         ResendOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        var now = timeProvider.GetUtcNow();
         const int maxConcurrencyRetries = 3;
 
         for (var attempt = 0; attempt < maxConcurrencyRetries; attempt++)
         {
+            var now = timeProvider.GetUtcNow();
             var previousChallenge = await dbContext.OtpChallenges
                 .Include(challenge => challenge.User)
                 .SingleOrDefaultAsync(challenge => challenge.Id == request.ChallengeId, cancellationToken);
@@ -429,7 +497,7 @@ public class AuthService(
             if (previousChallenge is null || previousChallenge.User is null || !previousChallenge.User.IsActive ||
                 previousChallenge.Purpose != "LOGIN" || previousChallenge.IsRevoked ||
                 previousChallenge.ConsumedAt is not null || !otpService.CanAttempt(previousChallenge) ||
-                now >= previousChallenge.FlowExpiresAt)
+                now >= previousChallenge.FlowExpiresAt || !otpService.HasBeenSent(previousChallenge))
             {
                 await auditService.TryRecordAsync(new AuditEvent(
                     AuditEventTypes.OtpResendFailed,
@@ -476,6 +544,11 @@ public class AuthService(
 
                 creation = otpService.CreateResendLoginChallenge(previousChallenge.User, previousChallenge, now);
                 dbContext.OtpChallenges.Add(creation.Challenge);
+                auditService.Record(new AuditEvent(
+                    AuditEventTypes.OtpCreated,
+                    true,
+                    creation.Challenge.UserId,
+                    creation.Challenge.Id));
                 await dbContext.SaveChangesAsync(cancellationToken);
 
                 if (transaction is not null)
@@ -496,12 +569,21 @@ public class AuthService(
             try
             {
                 await emailService.SendOtpAsync(
-                    new OtpEmailMessage(previousChallenge.User.Email, creation.Otp, creation.Challenge.ExpiresAt),
+                    new OtpEmailMessage(
+                        previousChallenge.User.Email,
+                        creation.Otp,
+                        creation.Challenge.ExpiresAt!.Value),
                     cancellationToken);
             }
             catch (EmailDeliveryException)
             {
                 var revoked = await RevokeAfterFailedDeliveryAsync(creation.Challenge.Id, cancellationToken);
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpDeliveryFailed,
+                    false,
+                    creation.Challenge.UserId,
+                    creation.Challenge.Id,
+                    AuditReasonCodes.DeliveryFailed), cancellationToken);
                 await auditService.TryRecordAsync(new AuditEvent(
                     AuditEventTypes.OtpResendFailed,
                     false,
@@ -512,9 +594,16 @@ public class AuthService(
                     revoked ? ResendOtpStatus.EmailDeliveryFailure : ResendOtpStatus.PersistenceFailure);
             }
 
-            if (!await IsChallengeUsableAfterDeliveryAsync(creation.Challenge.Id, cancellationToken))
+            var sentChallenge = await MarkChallengeSentAsync(creation.Challenge.Id, cancellationToken);
+            if (sentChallenge is null)
             {
                 var revoked = await RevokeAfterFailedDeliveryAsync(creation.Challenge.Id, cancellationToken);
+                await auditService.TryRecordAsync(new AuditEvent(
+                    AuditEventTypes.OtpDeliveryFailed,
+                    false,
+                    creation.Challenge.UserId,
+                    creation.Challenge.Id,
+                    AuditReasonCodes.DeliveryFailed), cancellationToken);
                 await auditService.TryRecordAsync(new AuditEvent(
                     AuditEventTypes.OtpResendFailed,
                     false,
@@ -528,22 +617,17 @@ public class AuthService(
             await auditService.TryRecordAsync(new AuditEvent(
                 AuditEventTypes.OtpResendSuccess,
                 true,
-                creation.Challenge.UserId,
-                creation.Challenge.Id), cancellationToken);
-            await auditService.TryRecordAsync(new AuditEvent(
-                AuditEventTypes.OtpCreated,
-                true,
-                creation.Challenge.UserId,
-                creation.Challenge.Id), cancellationToken);
+                sentChallenge.UserId,
+                sentChallenge.Id), cancellationToken);
 
             return new ResendOtpResult(
                 ResendOtpStatus.Success,
                 new ResendOtpResponse(
-                    creation.Challenge.Id,
-                    creation.Challenge.Purpose,
-                    creation.Challenge.ExpiresAt,
-                    creation.Challenge.FlowExpiresAt,
-                    otpService.GetResendAvailableAt(creation.Challenge)));
+                    sentChallenge.Id,
+                    sentChallenge.Purpose,
+                    sentChallenge.ExpiresAt!.Value,
+                    sentChallenge.FlowExpiresAt,
+                    otpService.GetResendAvailableAt(sentChallenge)));
         }
 
         return new ResendOtpResult(ResendOtpStatus.NotAvailable);
@@ -560,15 +644,52 @@ public class AuthService(
             .SingleOrDefaultAsync(cancellationToken);
     }
 
-    private async Task<bool> IsChallengeUsableAfterDeliveryAsync(Guid challengeId, CancellationToken cancellationToken)
+    private async Task<OtpChallenge?> MarkChallengeSentAsync(
+        Guid challengeId,
+        CancellationToken cancellationToken)
     {
-        var challenge = await dbContext.OtpChallenges
-            .AsNoTracking()
-            .Include(candidate => candidate.User)
-            .SingleOrDefaultAsync(candidate => candidate.Id == challengeId, cancellationToken);
+        const int maxConcurrencyRetries = 3;
+        dbContext.ChangeTracker.Clear();
 
-        return challenge is not null && challenge.User is not null && challenge.User.IsActive &&
-            otpService.IsUsable(challenge, timeProvider.GetUtcNow());
+        for (var attempt = 0; attempt < maxConcurrencyRetries; attempt++)
+        {
+            var challenge = await dbContext.OtpChallenges
+                .Include(candidate => candidate.User)
+                .SingleOrDefaultAsync(candidate => candidate.Id == challengeId, cancellationToken);
+            var sentAt = timeProvider.GetUtcNow();
+
+            if (challenge is null || challenge.User is null || !challenge.User.IsActive ||
+                challenge.Purpose != "LOGIN" || challenge.IsRevoked || challenge.ConsumedAt is not null ||
+                !otpService.IsPrepared(challenge) || otpService.IsExpired(challenge, sentAt) ||
+                sentAt >= challenge.FlowExpiresAt)
+            {
+                return null;
+            }
+
+            challenge.SentAt = sentAt;
+            auditService.Record(new AuditEvent(
+                AuditEventTypes.OtpSent,
+                true,
+                challenge.UserId,
+                challenge.Id));
+
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+                return challenge;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                dbContext.ChangeTracker.Clear();
+            }
+            catch (DbUpdateException)
+            {
+                dbContext.ChangeTracker.Clear();
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private async Task<bool> RevokeAfterFailedDeliveryAsync(Guid challengeId, CancellationToken cancellationToken)
@@ -607,15 +728,16 @@ public class AuthService(
     private static bool IsUniqueEmailViolation(DbUpdateException exception) =>
         exception.InnerException is SqlException { Number: 2601 or 2627 };
 
-    private static void LogLoginPerformance(
-        ILogger<AuthService>? logger,
-        string stage,
-        Stopwatch stopwatch)
+    private static string MaskEmail(string email)
     {
-        stopwatch.Stop();
-        logger?.LogInformation(
-            "LOGIN PERF {Stage}: {ElapsedMilliseconds}ms",
-            stage,
-            stopwatch.ElapsedMilliseconds);
+        var atIndex = email.IndexOf('@');
+        if (atIndex <= 0)
+        {
+            return "***";
+        }
+
+        var localPart = email[..atIndex];
+        var visibleLength = Math.Min(2, localPart.Length);
+        return $"{localPart[..visibleLength]}***{email[atIndex..]}";
     }
 }

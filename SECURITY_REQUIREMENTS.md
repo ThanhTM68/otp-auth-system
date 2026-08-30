@@ -107,8 +107,11 @@ SR-18:
 Các endpoint nhạy cảm phải được xem xét rate limiting:
 
 - login
+- send OTP lần đầu
 - verify OTP
 - resend OTP
+
+`send-otp` dùng policy riêng theo IP; cấu hình demo là 3 request trong 300 giây. Policy này không thay thế cooldown/resend limit và không loại bỏ các policy hiện có.
 
 ---
 
@@ -120,9 +123,20 @@ Không được cấp JWT ngay sau khi Password đúng.
 Luồng đúng:
 
 Password đúng
-→ tạo OTP challenge
+→ tạo pending OTP challenge, chưa sinh/gửi OTP
+→ client yêu cầu gửi OTP bằng challenge ID
+→ server lấy User/Email từ challenge rồi sinh, hash và gửi OTP
 → verify OTP thành công
 → cấp JWT.
+
+SR-19A:
+`POST /login` không được sinh OTP, gọi SMTP hoặc cấp JWT. Password verification success không đồng nghĩa authentication success.
+
+SR-19B:
+Endpoint gửi OTP lần đầu chỉ nhận challenge identifier khó đoán. Không được dùng email do client truyền để quyết định người nhận. Challenge phải còn hợp lệ, đúng purpose Login, chưa consume/revoke/hết pre-auth flow và chưa gửi OTP trước đó.
+
+SR-19C:
+Pending challenge chưa được verify. Verify chỉ được phép khi challenge có trạng thái đã gửi, có OTP HMAC và expiration hợp lệ. First send và resend là hai thao tác riêng; first send không được dùng để né resend cooldown.
 
 ---
 
@@ -144,7 +158,10 @@ Ghi nhận các security event quan trọng:
 - REGISTER_SUCCESS
 - LOGIN_PASSWORD_SUCCESS
 - LOGIN_PASSWORD_FAILED
+- OTP_SEND_REQUESTED
 - OTP_CREATED
+- OTP_SENT
+- OTP_DELIVERY_FAILED
 - OTP_VERIFY_FAILED
 - OTP_EXPIRED
 - OTP_VERIFY_SUCCESS

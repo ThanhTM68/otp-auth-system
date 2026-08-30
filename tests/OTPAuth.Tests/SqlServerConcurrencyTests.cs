@@ -44,7 +44,7 @@ public sealed class SqlServerConcurrencyTests
                 secondService.VerifyOtpAsync(request));
 
             Assert.Single(results, result => result.Status == VerifyOtpStatus.Success);
-            Assert.Single(results, result => result.Status == VerifyOtpStatus.VerificationFailed);
+            Assert.Single(results, result => result.Status == VerifyOtpStatus.NotCurrent);
             Assert.Equal(1, jwtService.CallCount);
 
             await using var verificationContext = CreateContext(connectionString);
@@ -88,7 +88,10 @@ public sealed class SqlServerConcurrencyTests
             var results = await Task.WhenAll(
                 services.Select(service => service.VerifyOtpAsync(request)));
 
-            Assert.All(results, result => Assert.Equal(VerifyOtpStatus.VerificationFailed, result.Status));
+            Assert.All(results, result => Assert.Contains(
+                result.Status,
+                [VerifyOtpStatus.VerificationFailed, VerifyOtpStatus.MaxAttempts]));
+            Assert.Contains(results, result => result.Status == VerifyOtpStatus.MaxAttempts);
             Assert.Equal(0, jwtService.CallCount);
 
             await using var verificationContext = CreateContext(connectionString);
@@ -106,6 +109,99 @@ public sealed class SqlServerConcurrencyTests
                 await context.DisposeAsync();
             }
 
+            await RemoveTestDataAsync(connectionString, testData.UserId);
+        }
+    }
+
+    [SqlServerFact]
+    public async Task ConcurrentFirstSend_OnSqlServer_DeliversExactlyOneOtp()
+    {
+        var connectionString = GetOptInConnectionString();
+        var now = DateTimeOffset.UtcNow;
+        var otpService = CreateOtpService();
+        var testData = await AddPendingTestDataAsync(connectionString, otpService, now);
+
+        try
+        {
+            using var barrier = new Barrier(2);
+            var emailService = new CountingEmailService();
+            await using var firstContext = CreateContext(
+                connectionString,
+                new FirstSaveBarrierInterceptor(barrier));
+            await using var secondContext = CreateContext(
+                connectionString,
+                new FirstSaveBarrierInterceptor(barrier));
+            var firstService = CreateAuthService(
+                firstContext,
+                otpService,
+                new CountingJwtTokenService(),
+                now,
+                emailService);
+            var secondService = CreateAuthService(
+                secondContext,
+                otpService,
+                new CountingJwtTokenService(),
+                now,
+                emailService);
+            var request = new SendOtpRequest { ChallengeId = testData.ChallengeId };
+
+            var results = await Task.WhenAll(
+                firstService.SendOtpAsync(request),
+                secondService.SendOtpAsync(request));
+
+            Assert.Single(results, result => result.Status == SendOtpStatus.Success);
+            Assert.Single(results, result => result.Status == SendOtpStatus.NotAvailable);
+            Assert.Equal(1, emailService.CallCount);
+
+            await using var verificationContext = CreateContext(connectionString);
+            var challenge = await verificationContext.OtpChallenges
+                .AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == testData.ChallengeId);
+            Assert.NotNull(challenge.SentAt);
+            Assert.Equal(32, challenge.OtpHash!.Length);
+        }
+        finally
+        {
+            await RemoveTestDataAsync(connectionString, testData.UserId);
+        }
+    }
+
+    [SqlServerFact]
+    public async Task RepeatedLogin_OnSqlServer_RevokesOpenChallengeBeforeCreatingPendingReplacement()
+    {
+        var connectionString = GetOptInConnectionString();
+        var now = DateTimeOffset.UtcNow;
+        var otpService = CreateOtpService();
+        var testData = await AddPendingTestDataAsync(connectionString, otpService, now);
+
+        try
+        {
+            await using var context = CreateContext(connectionString);
+            var emailService = new CountingEmailService();
+            var service = CreateAuthService(
+                context,
+                otpService,
+                new CountingJwtTokenService(),
+                now,
+                emailService);
+
+            var result = await service.LoginAsync(new LoginRequest
+            {
+                Email = testData.Email,
+                Password = "ValidPassword123!"
+            });
+
+            Assert.Equal(LoginStatus.Success, result.Status);
+            Assert.Equal(0, emailService.CallCount);
+            var challenges = await context.OtpChallenges
+                .Where(challenge => challenge.UserId == testData.UserId)
+                .ToListAsync();
+            Assert.Equal(2, challenges.Count);
+            Assert.True(challenges.Single(challenge => challenge.Id == testData.ChallengeId).IsRevoked);
+            Assert.Single(challenges, challenge => !challenge.IsRevoked && challenge.ConsumedAt is null);
+        }
+        finally
+        {
             await RemoveTestDataAsync(connectionString, testData.UserId);
         }
     }
@@ -148,13 +244,14 @@ public sealed class SqlServerConcurrencyTests
         AppDbContext context,
         OtpService otpService,
         IJwtTokenService jwtTokenService,
-        DateTimeOffset now) =>
+        DateTimeOffset now,
+        IEmailService? emailService = null) =>
         new(
             context,
             new PasswordHasher<User>(),
             new FixedTimeProvider(now),
             otpService,
-            new FakeEmailService(),
+            emailService ?? new FakeEmailService(),
             jwtTokenService,
             new FakeAuditService(context));
 
@@ -188,6 +285,7 @@ public sealed class SqlServerConcurrencyTests
             AuthenticationFlowId = Guid.NewGuid(),
             Purpose = "LOGIN",
             CreatedAt = now.AddMinutes(-1),
+            SentAt = now.AddMinutes(-1),
             ExpiresAt = now.AddMinutes(2),
             FlowExpiresAt = now.AddMinutes(9),
             AttemptCount = 0,
@@ -200,6 +298,34 @@ public sealed class SqlServerConcurrencyTests
         context.OtpChallenges.Add(challenge);
         await context.SaveChangesAsync();
         return (user.Id, challenge.Id);
+    }
+
+    private static async Task<(Guid UserId, Guid ChallengeId, string Email)> AddPendingTestDataAsync(
+        string connectionString,
+        OtpService otpService,
+        DateTimeOffset now)
+    {
+        await using var context = CreateContext(connectionString);
+        var appliedMigrations = await context.Database.GetAppliedMigrationsAsync();
+        Assert.Contains(
+            appliedMigrations,
+            migration => migration.EndsWith("_SupportPendingOtpChallenge", StringComparison.Ordinal));
+
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = $"first-send-{Guid.NewGuid():N}@example.test",
+            FullName = "First-send SQL concurrency test",
+            IsActive = true,
+            CreatedAt = now.AddMinutes(-1)
+        };
+        user.NormalizedEmail = EmailNormalizer.Normalize(user.Email);
+        user.PasswordHash = new PasswordHasher<User>().HashPassword(user, "ValidPassword123!");
+        var challenge = otpService.CreatePendingLoginChallenge(user, now.AddSeconds(-10));
+        context.Users.Add(user);
+        context.OtpChallenges.Add(challenge);
+        await context.SaveChangesAsync();
+        return (user.Id, challenge.Id, user.Email);
     }
 
     private static async Task RemoveTestDataAsync(string connectionString, Guid userId)
@@ -229,6 +355,21 @@ public sealed class SqlServerConcurrencyTests
                 "Bearer",
                 900,
                 issuedAt.AddMinutes(15));
+        }
+    }
+
+    private sealed class CountingEmailService : IEmailService
+    {
+        private int callCount;
+
+        public int CallCount => Volatile.Read(ref callCount);
+
+        public Task SendOtpAsync(
+            OtpEmailMessage message,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref callCount);
+            return Task.CompletedTask;
         }
     }
 

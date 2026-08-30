@@ -4,6 +4,6 @@ public sealed record LoginResponse(
     bool RequiresOtp,
     Guid ChallengeId,
     string Purpose,
-    DateTimeOffset ExpiresAt,
-    DateTimeOffset FlowExpiresAt,
-    DateTimeOffset ResendAvailableAt);
+    bool OtpSent,
+    string MaskedEmail,
+    DateTimeOffset FlowExpiresAt);

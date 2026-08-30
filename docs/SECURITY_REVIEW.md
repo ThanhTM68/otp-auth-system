@@ -4,7 +4,7 @@
 
 PHASE 13 đánh giá toàn bộ hệ thống xác thực từ đăng ký đến truy cập API bảo vệ:
 
-`Register -> Password Login -> OTP Challenge -> Email OTP -> OTP Verification -> Consume OTP -> JWT -> Protected API`
+`Register -> Password Login -> Pending Challenge -> Explicit Send OTP -> Sent Challenge -> OTP Verification -> Consume OTP -> JWT -> Protected API`
 
 Phạm vi gồm source ASP.NET Core, Controller, DTO, Service, Entity Framework Core, migration SQL Server, cấu hình, logging, audit, JWT, rate limiting, SMTP, frontend tĩnh, test và tài liệu bảo mật. Baseline khi bắt đầu review có 73 file được Git theo dõi; việc rà soát bao phủ source, test, cấu hình và tài liệu liên quan. Review đã đối chiếu đầy đủ 46 nhóm kiểm tra kỹ thuật của yêu cầu PHASE 13, bao gồm authentication bypass, password, OTP, resend, concurrency, JWT, secrets, logging, validation, SQL injection, HTTP security và frontend.
 
@@ -13,7 +13,7 @@ Không thực hiện thay đổi kiến trúc lớn, không đổi SQL Server/En
 ## Method
 
 - Đọc các tài liệu bắt buộc và đối chiếu implementation PHASE 1 đến PHASE 12 với `SECURITY_REQUIREMENTS.md`.
-- Theo dấu từng nhánh thành công/thất bại của register, login, verify OTP, resend OTP, JWT issuance và `/api/auth/me`.
+- Theo dấu từng nhánh thành công/thất bại của register, login, first send, verify OTP, resend OTP, JWT issuance và `/api/auth/me`.
 - Kiểm tra DTO allowlist, validation, response model và khả năng mass assignment.
 - Kiểm tra truy vấn EF Core, migration, index, foreign key, check constraint và tìm kiếm raw SQL có thể nhận dữ liệu client.
 - Kiểm tra CSPRNG, OTP HMAC, expiration, attempts, revoke, consume, replay và cạnh tranh đồng thời.
@@ -22,7 +22,7 @@ Không thực hiện thay đổi kiến trúc lớn, không đổi SQL Server/En
 - Kiểm tra log, audit event, exception response, cache policy, HTTPS, CORS, security headers và rate-limit partition.
 - Kiểm tra frontend bằng static analysis cho Web Storage, DOM sink, raw error rendering, CSP, form fallback và authentication state.
 - Chạy dependency vulnerability review, regression test tự động và test concurrency SQL Server dạng opt-in khi môi trường phù hợp.
-- Sau remediation, `dotnet restore` và `dotnet build` thành công; 80/80 tests pass, gồm 2 tests concurrency đã thực thi trên SQL Server thật; dependency scan không còn advisory.
+- Security review gốc đã có lần chạy 80/80. Sau split-flow refactor, full suite bật SQL opt-in đạt **105/105 pass, 0 failed, 0 skipped**, gồm đủ bốn test concurrency trên SQL Server thật.
 
 ## Findings Summary
 
@@ -88,10 +88,10 @@ Status: FIXED
 Severity: MEDIUM  
 Category: Distributed Rate Limiting / OTP Issuance Abuse  
 Affected file: `src/OTPAuth.API/Program.cs`; `src/OTPAuth.API/Services/AuthService.cs`; thiết kế quota trong `docs/REQUIREMENTS.md`  
-Description: Hệ thống chưa có quota theo normalized email/User và chưa có bộ đếm phát OTP dùng chung giữa password login với resend. Limiter hiện tại chủ yếu partition theo IP, còn resend count chỉ giới hạn trong một authentication flow.  
+Description: Hệ thống đã tách first send khỏi login và có policy `send-otp` riêng 3/300 giây/IP, nhưng chưa có quota theo normalized email/User và chưa có bộ đếm phát OTP dùng chung giữa first send với resend. Resend count chỉ giới hạn trong một authentication flow.
 Impact: Botnet hoặc nhiều IP có credential đúng có thể gây email spam, tạo nhiều challenge/audit row và tăng tải SMTP/database.  
-Attack scenario: Attacker dùng credential bị rò rỉ, luân phiên IP và liên tục bắt đầu login flow mới để vượt giới hạn theo từng IP/flow.  
-Remediation: Thiết kế quota nguyên tử theo normalized email/User và một issuance budget dùng chung cho login + resend. Nếu chạy nhiều instance, bộ đếm phải dùng shared store hoặc database transaction phù hợp; không tự thêm kiến trúc phân tán khi chưa được phê duyệt.  
+Attack scenario: Attacker dùng credential bị rò rỉ, luân phiên IP, tạo pending flow mới rồi gọi first send để vượt giới hạn theo từng IP/flow.
+Remediation: Thiết kế quota nguyên tử theo normalized email/User và một issuance budget dùng chung cho first send + resend. Nếu chạy nhiều instance, bộ đếm phải dùng shared store hoặc database transaction phù hợp; không tự thêm kiến trúc phân tán khi chưa được phê duyệt.
 Status: OPEN
 
 ### SEC-006
@@ -143,21 +143,21 @@ Status: FIXED
 Severity: LOW  
 Category: OTP Delivery State / Expiration  
 Affected file: `src/OTPAuth.API/Services/AuthService.cs`; `tests/OTPAuth.Tests/EmailDeliveryTests.cs`  
-Description: Login flow trước đây không reload/recheck challenge sau khi SMTP hoàn tất, trong khi resend đã có bước kiểm tra tương đương.  
+Description: Login flow cũ từng thực hiện SMTP trong chính `/login` và không reload/recheck challenge sau delivery. Split-flow hiện tại đã chuyển SMTP sang `/send-otp`, dùng prepared/sent state và chỉ set `SentAt` sau delivery success.
 Impact: Login có thể trả challenge thành công dù OTP đã hết hạn hoặc challenge không còn usable trong lúc gửi email.  
 Attack scenario: SMTP chậm tới sát/quá TTL hoặc một request cạnh tranh revoke challenge trong lúc delivery đang diễn ra.  
-Remediation: Sau delivery, reload challenge/User bằng no-tracking, kiểm tra toàn bộ usable invariant; nếu thất bại thì best-effort revoke, audit failure và không trả success.  
+Remediation: Tách pending challenge khỏi delivery, finalize `SentAt`/sent state chỉ sau SMTP success; nếu delivery/finalize thất bại thì fail closed/revoke, audit failure và không trả success.
 Status: FIXED
 
 ### SEC-011
 
-Severity: LOW  
-Category: Database Defense in Depth / Constraints  
-Affected file: `src/OTPAuth.API/Data/AppDbContext.cs`; `src/OTPAuth.API/Data/Migrations/20260822191004_InitialCreate.cs`; `docs/DATABASE_DESIGN.md`  
-Description: Một số lifecycle invariant được tài liệu hóa vẫn chỉ được service enforce, chưa có đầy đủ database CHECK constraint cho mọi tổ hợp consumed/revoked/time/flow state.  
-Impact: Bug tương lai hoặc write ngoài ứng dụng có thể tạo row trạng thái không hợp lệ dù request path hiện tại vẫn kiểm tra an toàn.  
-Attack scenario: Một maintenance script hoặc code path có quyền DB ghi trực tiếp challenge với các field lifecycle mâu thuẫn.  
-Remediation: Thiết kế constraint không phá dữ liệu hiện có, kiểm tra dữ liệu trước migration và tạo EF Core migration riêng; không sửa migration đã apply.  
+Severity: LOW
+Category: Database Defense in Depth / Constraints
+Affected file: `src/OTPAuth.API/Data/AppDbContext.cs`; migration `SupportPendingOtpChallenge`; `docs/DATABASE_DESIGN.md`
+Description: Migration mới đã thêm state/expiration/consumed constraints cốt lõi và backfill `SentAt`, nhưng một số lifecycle invariant vẫn chỉ được service enforce, gồm flow TTL tối đa, max-attempt phải đi cùng revoke và mọi tổ hợp consumed/revoked.
+Impact: Bug tương lai hoặc write ngoài ứng dụng có thể tạo row trạng thái không hợp lệ dù request path hiện tại vẫn kiểm tra an toàn.
+Attack scenario: Một maintenance script hoặc code path có quyền DB ghi trực tiếp challenge với các field lifecycle mâu thuẫn.
+Remediation: Giữ các constraint mới; nếu bổ sung phần còn lại, kiểm tra dữ liệu hiện hữu và tạo migration riêng, không sửa migration đã apply.
 Status: OPEN
 
 ### SEC-012
@@ -219,14 +219,15 @@ Status: ACCEPTED
 
 - Password dùng ASP.NET Core `IPasswordHasher<User>`; không có password plaintext trong entity/database/response/log.
 - Register chuẩn hóa email, có unique database index và xử lý race duplicate an toàn.
-- Login dùng generic error và dummy password hash; password đúng chỉ tạo OTP challenge, không cấp JWT.
+- Login dùng generic error và dummy password hash; password đúng chỉ tạo pending challenge, không sinh/gửi OTP và không cấp JWT.
+- First send chỉ nhận challenge ID, lấy email từ server state, có policy IP riêng và không thể gọi lặp để né resend cooldown.
 - OTP gồm đúng 6 chữ số, giữ leading zero và dùng `RandomNumberGenerator`.
 - Database chỉ lưu HMAC-SHA-256 của OTP với key ngoài source; comparison dùng fixed-time API.
 - OTP enforce TTL 3 phút, flow TTL 10 phút, tối đa 5 lần sai, revoke, consume và single-use/replay protection.
 - Resend chỉ nhận opaque challenge ID, dùng server time, cooldown 60 giây, tối đa 3 lần/flow, revoke mã cũ và reset attempt cho mã mới.
 - JWT chỉ được tạo sau khi `ConsumedAt` commit; token có claim tối thiểu, HS256, issuer, audience, signing-key và lifetime validation.
 - `/api/auth/me` có `[Authorize]`, parse claim `sub`, recheck active User và chỉ trả profile tối thiểu.
-- Rate limiter dùng remote IP do server quan sát, không tin trực tiếp `X-Forwarded-For`; login, verify, resend và register có policy riêng.
+- Rate limiter dùng remote IP do server quan sát, không tin trực tiếp `X-Forwarded-For`; register, login, send, verify và resend có policy riêng.
 - Controller bind request DTO allowlist, không bind Entity; client không thể set UserId, security state, expiry, attempt hoặc revoke fields.
 - Data access dùng EF Core LINQ/parameterized query; không phát hiện user-controlled raw SQL hoặc SQL injection path.
 - API error dùng generic Problem Details; không trả stack, SQL/SMTP detail, connection string, local path hoặc secret.
@@ -242,7 +243,7 @@ Status: ACCEPTED
 
 ## Remaining Risks
 
-- **SEC-005 — OPEN:** chưa có quota normalized-email/User và issuance budget dùng chung cho login + resend; thiết kế nhiều instance cần shared state có chủ đích.
+- **SEC-005 — OPEN:** chưa có quota normalized-email/User và issuance budget dùng chung cho first send + resend; thiết kế nhiều instance cần shared state có chủ đích.
 - **SEC-011 — OPEN:** database chưa encode toàn bộ lifecycle invariant bằng CHECK constraint; cần migration riêng sau khi đánh giá dữ liệu hiện hữu.
 - **SEC-012 — ACCEPTED:** register `409` tiết lộ email tồn tại để đổi lấy UX demo rõ ràng; register limiter chỉ giảm abuse, không loại bỏ enumeration.
 - **SEC-014 — ACCEPTED:** SMTP và SQL không atomic; compensation failure hiếm vẫn có thể để challenge open tới TTL.

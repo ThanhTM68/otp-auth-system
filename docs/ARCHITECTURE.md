@@ -58,16 +58,16 @@ Các service chuyên trách chỉ tách những chức năng có ý nghĩa bảo
 
 ### 3.2. Controller
 
-- `AuthController` công khai bốn endpoint register, login, verify OTP và resend OTP.
+- `AuthController` công khai năm endpoint register, login, send OTP lần đầu, verify OTP và resend OTP.
 - Protected controller hoặc action `GET /api/auth/me` có `[Authorize]`.
 - Nhận DTO theo allowlist, kích hoạt validation, gọi đúng service và ánh xạ kết quả nghiệp vụ sang HTTP status.
 - Không sinh OTP, hash password, thao tác trực tiếp `DbContext` hoặc cấp JWT trong controller.
 
 ### 3.3. AuthService
 
-- Điều phối Register Flow, Login Password Flow, OTP Verification Flow, Resend Flow và Authentication Success Flow.
+- Điều phối Register Flow, Login Password Flow, First-send Flow, OTP Verification Flow, Resend Flow và Authentication Success Flow.
 - Quyết định transaction boundary và thứ tự kiểm tra bảo mật.
-- Áp dụng quota nghiệp vụ theo normalized email/challenge/User sau khi DTO đã validate và server state đã được lookup.
+- Kiểm tra state/cooldown/attempt theo dữ liệu server sau DTO validation; quota dùng chung theo normalized email/User vẫn là control mục tiêu chưa hiện thực.
 - Chỉ lấy UserId, email nhận OTP, Purpose, timestamps và trạng thái challenge từ server/database.
 - Ghi audit event trong cùng transaction với thay đổi trạng thái quan trọng khi có thể.
 - Chỉ gọi `JwtTokenService` sau khi consume OTP đã commit thành công.
@@ -85,7 +85,7 @@ Các service chuyên trách chỉ tách những chức năng có ý nghĩa bảo
 - Tập trung lifecycle `IsExpired`, `IsUsable`, increment attempt, revoke và state single-use; việc persist atomic/concurrency sẽ được thêm ở Phase 7.
 - Nhận `OtpOptions` cho độ dài, TTL, flow TTL và giới hạn attempts; bản demo validate cố định 6 chữ số, 3 phút, 10 phút và tối đa 5 attempts.
 - Nhận `Otp:HashingKey` tối thiểu 256 bit từ User Secrets/environment, không từ source code; payload HMAC có encoding có độ dài rõ ràng cho `AuthenticationFlowId`, `ChallengeId`, `UserId`, `Purpose` và OTP.
-- Không lưu hoặc log OTP plaintext. Khi login, mã chỉ sống tạm trong `OtpChallengeCreation` để chuyển một lần sang `IEmailService` sau khi `OtpHash` đã được persist.
+- Không lưu hoặc log OTP plaintext. Login chỉ tạo pending challenge; OTP chỉ sống tạm trong memory ở send/resend để chuyển một lần sang `IEmailService`.
 
 ### 3.6. JwtTokenService
 
@@ -101,7 +101,7 @@ Các service chuyên trách chỉ tách những chức năng có ý nghĩa bảo
 - Chỉ nhận địa chỉ email lấy từ User trong database và OTP tạm thời từ AuthService.
 - Gửi qua SMTP có TLS; SMTP credential lấy từ configuration an toàn.
 - Template email chỉ nêu OTP, thời hạn thực tế tính từ `ExpiresAt` (tối đa 3 phút) và cảnh báo không chia sẻ mã.
-- AuthService persist challenge trước khi gọi EmailService. Delivery failure được sanitize, challenge mới bị revoke và client nhận `503 OTP_DELIVERY_UNAVAILABLE`; không trả success giả.
+- AuthService persist state prepared (`OtpHash`/`ExpiresAt`, chưa có `SentAt`) trước SMTP, rồi chỉ đánh dấu `SentAt` ở state sent sau delivery thành công. Delivery failure được sanitize, challenge bị fail closed/revoke và client nhận `503 OTP_DELIVERY_UNAVAILABLE`; không trả success giả.
 - Không log subject/body chứa OTP và không bật SMTP protocol trace trong production.
 - Không giữ SQL transaction trong khi gọi SMTP.
 
@@ -123,9 +123,9 @@ Thứ tự logic đề xuất:
 5. Authentication JWT.
 6. Authorization.
 7. Model binding/DTO validation.
-8. Controller và Service; tại đây mới áp dụng quota cần normalized email, challenge hoặc User.
+8. Controller và Service; tại đây áp dụng state/cooldown/attempt checks. Quota cần normalized email/User là phần còn lại đã được tài liệu hóa.
 
-Hiện thực sau Phase 13 gắn policy fixed-window độc lập theo IP cho `register` (5/3600 giây), `login` (5/60 giây), `verify-otp` (10/60 giây) và `resend-otp` (3/300 giây). Middleware không đọc body có password/OTP để tạo partition key; auth POST body tối đa 16 KiB. Các quota dùng chung theo User/normalized email vẫn là việc còn lại. `GET /api/auth/me` bắt buộc JWT hợp lệ, lấy UserId từ claim `sub`, đọc lại User từ database và trả `403` nếu tài khoản đã inactive. Mọi protected endpoint tương lai phải tái sử dụng cùng kiểm tra active-user để disable User có hiệu lực ngay.
+Hiện thực gắn policy fixed-window độc lập theo IP cho `register` (5/3600 giây), `login` (5/60 giây), `send-otp` (3/300 giây), `verify-otp` (10/60 giây) và `resend-otp` (3/300 giây). Middleware không đọc body có password/OTP để tạo partition key; auth POST body tối đa 16 KiB. Các quota dùng chung theo User/normalized email vẫn là việc còn lại. `GET /api/auth/me` bắt buộc JWT hợp lệ, lấy UserId từ claim `sub`, đọc lại User từ database và trả `403` nếu tài khoản đã inactive. Mọi protected endpoint tương lai phải tái sử dụng cùng kiểm tra active-user để disable User có hiệu lực ngay.
 
 ## 5. Trust boundary và luồng dữ liệu nhạy cảm
 
@@ -165,16 +165,14 @@ sequenceDiagram
 
 Unique index trên `NormalizedEmail` là hàng rào cuối cho hai request register đồng thời; một request thành công và request còn lại được ánh xạ sang `409 Conflict` đã sanitize.
 
-### 6.2. Password login và OTP generation
+### 6.2. Password login và pending challenge
 
 ```mermaid
 sequenceDiagram
     actor C as Client
     participant AC as AuthController
     participant AS as AuthService
-    participant OS as OtpService
     participant DB as EF Core / SQL Server
-    participant ES as Email Service
 
     C->>AC: POST /api/auth/login (email, password)
     AC->>AS: Validated login DTO
@@ -185,33 +183,47 @@ sequenceDiagram
         AS-->>AC: Invalid credentials result
         AC-->>C: 401 generic; no challenge
     else Password đúng
-        AS->>DB: Audit LOGIN_PASSWORD_SUCCESS
-        AS->>AS: Enforce shared OTP issuance quota
-        alt Quota bị vượt
-            AS->>DB: Audit RATE_LIMITED
-            AS-->>AC: Rate-limited result
-            AC-->>C: 429; no challenge
-        else Còn quota
-            AS->>OS: Generate OTP + HMAC
-            OS-->>AS: OTP transient + OtpHash
-            AS->>DB: Transaction: revoke old + insert challenge + OTP_CREATED
-            DB-->>AS: Commit
-            AS->>ES: Send OTP to User.Email
-            alt SMTP thành công
-                AS-->>AC: Challenge metadata
-                AC-->>C: 200 metadata; no JWT
-            else SMTP thất bại
-                AS->>DB: Best-effort compensation: revoke + audit
-                AS-->>AC: Delivery unavailable result
-                AC-->>C: 503 generic
-            end
-        end
+        AS->>DB: Revoke previous open login challenge
+        AS->>DB: Insert pending challenge + LOGIN_PASSWORD_SUCCESS
+        DB-->>AS: Commit
+        AS-->>AC: requiresOtp=true, otpSent=false, masked email
+        AC-->>C: 200 pending metadata; no SMTP/JWT
     end
 ```
 
-Việc gửi SMTP diễn ra sau DB commit để không giữ database lock qua network call. Transaction bù sau SMTP failure/timeout là best-effort, không phải atomic guarantee: process crash hoặc compensation conflict có thể để challenge open tới TTL/flow expiry. Server dùng SMTP timeout ngắn hơn OTP TTL và kiểm tra lại challenge còn usable trước response `200`. Nếu provider đã nhận email nhưng client nhận `503`, email đến muộn có thể chứa mã đã revoke; nếu compensation không chạy, mọi TTL/attempt/rate/flow control vẫn còn hiệu lực.
+Pending challenge có GUID ngẫu nhiên, `OtpHash = null`, `SentAt = null`, `ExpiresAt = null` và pre-auth `FlowExpiresAt`. Password verification success không đồng nghĩa authentication success; `/login` không chờ SMTP và không thể trả JWT.
 
-### 6.3. OTP verification và cấp JWT
+### 6.3. First send OTP
+
+```mermaid
+sequenceDiagram
+    actor C as Client
+    participant AC as AuthController
+    participant AS as AuthService
+    participant OS as OtpService
+    participant DB as EF Core / SQL Server
+    participant ES as Email Service
+
+    C->>AC: POST /api/auth/send-otp (challengeId)
+    AC->>AS: Validated DTO + IP rate policy
+    AS->>DB: Load pending LOGIN challenge + User
+    AS->>AS: Validate active/open/flow/pending state
+    AS->>OS: Generate OTP + HMAC + expiration
+    AS->>DB: Persist prepared state + OTP_SEND_REQUESTED + OTP_CREATED
+    AS->>ES: Send transient OTP to User.Email
+    alt SMTP success
+        AS->>DB: Set SentAt + OTP_SENT
+        AS-->>AC: Sent metadata
+        AC-->>C: 200 otpSent=true + server timers
+    else SMTP/persist failure
+        AS->>DB: Fail closed/revoke + OTP_DELIVERY_FAILED
+        AC-->>C: 503 generic
+    end
+```
+
+First send chỉ chấp nhận pending challenge chưa từng gửi. Client không truyền email. Gọi lại `/send-otp` sau khi challenge đã sent bị từ chối và không thể né cooldown; từ thời điểm đó chỉ `/resend-otp` được dùng.
+
+### 6.4. OTP verification và cấp JWT
 
 ```mermaid
 sequenceDiagram
@@ -225,12 +237,12 @@ sequenceDiagram
     C->>AC: POST /api/auth/verify-otp (challengeId, otp)
     AC->>AS: Validated DTO
     AS->>DB: Load active LOGIN challenge + User
-    AS->>AS: Check revoked/consumed/attempt/expiry/user active
+    AS->>AS: Require SentAt/hash/expiry; check revoked/consumed/attempt/expiry/user active
     AS->>OS: Fixed-time HMAC verification
     alt OTP sai
         AS->>DB: Atomic increment; revoke at 5; audit failure
         AS-->>AC: Verification failed result
-        AC-->>C: 401 generic
+        AC-->>C: 400 safe OTP error
     else OTP đúng
         AS->>DB: Transaction: conditional consume + audit success
         DB-->>AS: Commit won
@@ -243,7 +255,7 @@ sequenceDiagram
 
 Nếu conditional consume/concurrency check không thắng, request phải bị từ chối như replay và tuyệt đối không gọi JWT Token Service.
 
-### 6.4. Resend OTP
+### 6.5. Resend OTP
 
 ```mermaid
 sequenceDiagram
@@ -257,19 +269,20 @@ sequenceDiagram
     C->>AC: POST /api/auth/resend-otp (current challengeId)
     AC->>AS: Validated DTO
     AS->>DB: Load requested open challenge + User
-    AS->>AS: Check state, flow expiry, resend count, cooldown and quotas
+    AS->>AS: Require sent state; check flow, resend count and cooldown from SentAt
     AS->>OS: Generate completely new OTP + HMAC
-    AS->>DB: Transaction: revoke old + insert new + audits
+    AS->>DB: Transaction: revoke old + insert prepared replacement
     DB-->>AS: Commit
     AS->>ES: Send new OTP to User.Email
     ES-->>AS: Delivery result
-    AS-->>AC: New challenge metadata or delivery error
+    AS->>DB: On success set SentAt + success audits
+    AS-->>AC: New challenge metadata or fail-closed delivery error
     AC-->>C: 200 metadata or 503 after best-effort revoke
 ```
 
-Hiện thực Phase 8 dùng `ResendOtpRequest` chỉ có `challengeId`. `AuthService` tải challenge cùng User từ database, dùng `CreatedAt` và `TimeProvider` UTC cho cooldown 60 giây, sau đó dùng `RowVersion`/retry có giới hạn để revoke challenge cũ và tạo challenge kế nhiệm trong transaction SQL ngắn. OTP plaintext chỉ được giữ tạm trong `OtpChallengeCreation` để gọi `IEmailService` sau commit; delivery failure kích hoạt best-effort revoke challenge mới. Không có JWT trong luồng resend.
+`ResendOtpRequest` chỉ có `challengeId`. `AuthService` tải challenge cùng User từ database, yêu cầu challenge đã sent và dùng `SentAt` với `TimeProvider` UTC cho cooldown 60 giây. `RowVersion`/retry có giới hạn bảo vệ việc revoke challenge cũ và tạo challenge kế nhiệm prepared trong transaction SQL ngắn. OTP plaintext chỉ được giữ tạm để gọi `IEmailService`; delivery failure fail closed/revoke challenge mới. Không có JWT trong luồng resend.
 
-Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa hết hạn trước khi trả `200`. Nếu mã đã hết hạn trong lúc gửi, response là `503`, server best-effort revoke challenge mới và email đến muộn không được coi là usable.
+Sau SMTP, AuthService chỉ finalize state sent nếu flow còn hợp lệ. Nếu finalize thất bại, response không được giả success và challenge replacement bị fail closed; email đến muộn không được coi là một mã usable nếu state sent chưa commit.
 
 ## 7. Transaction và concurrency
 
@@ -308,7 +321,7 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 - Một exception middleware ánh xạ lỗi đã biết sang HTTP status và Problem Details thống nhất.
 - Client chỉ thấy message an toàn và `traceId`; không thấy stack trace, connection string, SQL, HMAC, SMTP response chi tiết hoặc tên nội bộ.
 - Login dùng cùng lỗi cho email không tồn tại, password sai và tài khoản inactive.
-- Verify dùng cùng lỗi cho challenge lạ, OTP sai, expired, consumed, revoked hoặc locked.
+- Verify dùng các code/message an toàn cho chưa gửi, expired, không còn current, max attempts và OTP không khớp; không code nào trả OTP/hash, email đầy đủ hay chi tiết database.
 - Chi tiết điều tra nằm trong `ReasonCode` allowlist của AuditLog, không dùng raw exception/request.
 - Lỗi rate limit trả `429` và `Retry-After` khi xác định được.
 
@@ -316,7 +329,7 @@ Sau SMTP, AuthService phải reload/recheck challenge còn usable và flow chưa
 
 - Application log chỉ chứa thông tin vận hành tối thiểu như trace ID, event code và thời lượng.
 - Logging provider của EF Core bị tắt trong bản demo để raw SQL/provider exception và stack không đi vòng qua exception boundary; lỗi ngoài dự kiến chỉ ghi exception type cùng trace ID đã sanitize. Môi trường production cần sink bảo mật riêng nếu muốn giữ diagnostic sâu hơn.
-- Audit log chứa event bảo mật dạng cấu trúc, do `IAuditService` trung tâm tạo từ `AuthService`, không phải controller. Event đã có: `REGISTER_SUCCESS`, `LOGIN_PASSWORD_SUCCESS`, `LOGIN_PASSWORD_FAILED`, `OTP_CREATED`, `OTP_DELIVERY_FAILED`, `OTP_VERIFY_FAILED`, `OTP_EXPIRED`, `OTP_REPLAY_REJECTED`, `OTP_MAX_ATTEMPTS_REACHED`, `OTP_VERIFY_SUCCESS`, `JWT_ISSUED`, `OTP_RESEND_SUCCESS`, `OTP_RESEND_FAILED`.
+- Audit log chứa event bảo mật dạng cấu trúc, do `IAuditService` trung tâm tạo từ `AuthService`, không phải controller. Event đã có: `REGISTER_SUCCESS`, `LOGIN_PASSWORD_SUCCESS`, `LOGIN_PASSWORD_FAILED`, `OTP_SEND_REQUESTED`, `OTP_CREATED`, `OTP_SENT`, `OTP_DELIVERY_FAILED`, `OTP_VERIFY_FAILED`, `OTP_EXPIRED`, `OTP_REPLAY_REJECTED`, `OTP_MAX_ATTEMPTS_REACHED`, `OTP_VERIFY_SUCCESS`, `JWT_ISSUED`, `OTP_RESEND_SUCCESS`, `OTP_RESEND_FAILED`.
 - Thay đổi state quan trọng (register, tạo challenge login, verify sai/consume OTP) ghi audit cùng `SaveChanges` khi có thể. Các event sau SMTP/JWT dùng best-effort; nếu ghi audit thất bại, chỉ log mã event an toàn và không làm thay đổi kết quả xác thực đã commit.
 - Rate limit không ghi audit theo từng request để tránh log flood.
 - Cấm ghi password, PasswordHash, OTP, OtpHash, JWT, Authorization header, SMTP/DB/JWT/HMAC secrets hoặc raw request body.
@@ -339,7 +352,7 @@ Các key JWT và OTP phải khác nhau. Local development dùng .NET User Secret
 - Inject `TimeProvider` để test OTP hết hạn và cooldown không cần chờ thật.
 - Tách OTP generator/protector, password hasher, JWT service và email sender qua interface nhỏ để unit test AuthService.
 - Dùng email sender giả chỉ ghi nhận metadata cần kiểm tra, tuyệt đối không in OTP ra test log.
-- Unit test các nhánh đúng/sai/expired/consumed/replay/max attempts/resend/password sai.
+- Unit test password đúng tạo pending nhưng không gửi email/JWT; first send hợp lệ/không hợp lệ/lặp/failure; verify trước send; đúng/sai/expired/consumed/replay/max attempts; resend/cooldown/mã cũ.
 - Integration test với database thật hoặc provider phù hợp để kiểm tra unique index, rowversion và transaction race.
 - Test API bảo đảm response trước OTP không chứa JWT và endpoint protected từ chối token không hợp lệ.
 
@@ -348,6 +361,7 @@ Các key JWT và OTP phải khác nhau. Local development dùng .NET User Secret
 - Chọn một deployable monolith và một SQL Server; rate limiter in-memory phù hợp bản demo một instance.
 - Phase 12 phục vụ HTML/CSS/JavaScript tĩnh từ `wwwroot` trong cùng ASP.NET Core app. UI gọi API bằng relative URL nên không cần mở CORS.
 - Challenge ID chỉ giữ trong bộ nhớ JavaScript của trang; JWT demo giữ trong `sessionStorage` và bị xóa khi logout. Password và OTP không được ghi vào Web Storage hoặc console.
+- Frontend dùng ba trạng thái trong cùng OTP card: A password verified/chưa gửi, B đang gửi với CTA inline loading, C đã gửi với input và timer lấy từ `expiresAt`/`resendAvailableAt` của server. Refresh mất state memory nên quay về login và không tự gửi email.
 - AuthService dùng trực tiếp DbContext; không thêm Repository, CQRS hoặc event bus.
 - Chọn transaction ngắn + `RowVersion` + filtered unique index để bảo vệ OTP state.
 - Chọn HMAC keyed hash cho OTP thay vì raw hash do entropy OTP thấp.

@@ -5,6 +5,11 @@ namespace OTPAuth.Tests;
 
 internal sealed class FakeJwtTokenService : IJwtTokenService
 {
-    public JwtTokenResult CreateToken(User user, DateTimeOffset issuedAt) =>
-        new("test-access-token", "Bearer", 900, issuedAt.AddMinutes(15));
+    public int CallCount { get; private set; }
+
+    public JwtTokenResult CreateToken(User user, DateTimeOffset issuedAt)
+    {
+        CallCount++;
+        return new("test-access-token", "Bearer", 900, issuedAt.AddMinutes(15));
+    }
 }

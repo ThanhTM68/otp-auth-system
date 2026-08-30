@@ -19,12 +19,12 @@ Luồng xác thực chính:
 1. Người dùng đăng ký tài khoản.
 2. Password phải được hash trước khi lưu database.
 3. Người dùng đăng nhập bằng Email + Password.
-4. Nếu Password đúng, hệ thống tạo OTP.
-5. OTP được gửi tới Email người dùng.
-6. Người dùng nhập OTP.
-7. Server kiểm tra OTP.
-8. Nếu OTP hợp lệ thì xác thực thành công.
-9. Hệ thống cấp JWT cho người dùng.
+4. Nếu Password đúng, hệ thống tạo pending challenge; bước này chưa tạo/gửi OTP và chưa cấp JWT.
+5. Người dùng chủ động bấm gửi mã xác thực bằng `challengeId`; client không được chọn email nhận.
+6. Server sinh OTP, chỉ lưu HMAC và gửi OTP tới Email lấy từ User của challenge.
+7. Người dùng nhập OTP.
+8. Server kiểm tra OTP và consume challenge đúng một lần.
+9. Nếu OTP hợp lệ thì xác thực thành công và hệ thống cấp JWT.
 
 ## Công nghệ
 
@@ -69,6 +69,7 @@ Frontend:
 
 - Đăng ký
 - Đăng nhập bằng Email + Password
+- Gửi OTP sau khi Password đã được xác minh
 - Xác thực OTP
 - Gửi lại OTP
 - JWT Authentication

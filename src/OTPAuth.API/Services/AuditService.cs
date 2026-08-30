@@ -9,7 +9,9 @@ public static class AuditEventTypes
     public const string RegisterSuccess = "REGISTER_SUCCESS";
     public const string LoginPasswordSuccess = "LOGIN_PASSWORD_SUCCESS";
     public const string LoginPasswordFailed = "LOGIN_PASSWORD_FAILED";
+    public const string OtpSendRequested = "OTP_SEND_REQUESTED";
     public const string OtpCreated = "OTP_CREATED";
+    public const string OtpSent = "OTP_SENT";
     public const string OtpDeliveryFailed = "OTP_DELIVERY_FAILED";
     public const string OtpVerifyFailed = "OTP_VERIFY_FAILED";
     public const string OtpExpired = "OTP_EXPIRED";
@@ -32,6 +34,7 @@ public static class AuditReasonCodes
     public const string OtpExpired = "OTP_EXPIRED";
     public const string FlowExpired = "FLOW_EXPIRED";
     public const string OtpMismatch = "OTP_MISMATCH";
+    public const string OtpNotSent = "OTP_NOT_SENT";
     public const string DeliveryFailed = "DELIVERY_FAILED";
     public const string ResendCooldown = "RESEND_COOLDOWN";
     public const string ResendLimitReached = "RESEND_LIMIT_REACHED";

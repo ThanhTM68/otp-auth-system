@@ -169,6 +169,32 @@ public class StaticUiTests
     }
 
     [Fact]
+    public async Task OtpView_ProvidesPendingSendingAndSentStates()
+    {
+        using var factory = new SecurityWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var html = await client.GetStringAsync("/");
+        var script = await client.GetStringAsync("/app.js");
+
+        Assert.Contains("data-otp-state=\"pending\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-otp-state=\"sent\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"send-otp-button\"", html, StringComparison.Ordinal);
+        Assert.Contains("Gửi mã xác thực", html, StringComparison.Ordinal);
+        Assert.Contains("Đang gửi mã xác thực...", html, StringComparison.Ordinal);
+        Assert.Contains("Quá trình này có thể mất vài giây.", html, StringComparison.Ordinal);
+        Assert.Contains("Thông tin đăng nhập đã được xác minh.", html, StringComparison.Ordinal);
+        Assert.Contains("Mã xác thực đã được gửi đến email của bạn.", script, StringComparison.Ordinal);
+        Assert.Contains("sendOtp: \"/api/auth/send-otp\"", script, StringComparison.Ordinal);
+        Assert.Contains("sendOtpButton.addEventListener(\"click\"", script, StringComparison.Ordinal);
+        Assert.Contains("showOtpState(\"pending\")", script, StringComparison.Ordinal);
+        Assert.Contains("showOtpState(\"sent\")", script, StringComparison.Ordinal);
+        Assert.Equal(1, script.Split("request(api.sendOtp", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("sessionStorage.setItem(\"challengeId\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("localStorage", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Styles_IncludeGlassFallbackResponsiveAndAccessibleMotionStates()
     {
         using var factory = new SecurityWebApplicationFactory();
@@ -201,6 +227,7 @@ public class StaticUiTests
         [
             "alert", "login-form", "login-email", "login-password", "register-form",
             "register-name", "register-email", "register-password", "register-confirm-password",
+            "send-otp-button", "otp-send-progress", "pending-otp-destination",
             "otp-form", "otp-input", "otp-destination", "otp-timer-message", "otp-timer-label",
             "otp-countdown", "resend-timer-label", "resend-countdown", "resend-period", "otp-expiry-status",
             "resend-button", "dashboard-greeting", "profile-name", "profile-email",

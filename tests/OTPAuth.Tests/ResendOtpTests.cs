@@ -38,7 +38,8 @@ public class ResendOtpTests
         Assert.Equal((short)0, newChallenge.AttemptCount);
         Assert.Equal((short)1, newChallenge.ResendCount);
         Assert.Equal(oldChallenge.AuthenticationFlowId, newChallenge.AuthenticationFlowId);
-        Assert.Equal(32, newChallenge.OtpHash.Length);
+        Assert.Equal(32, newChallenge.OtpHash!.Length);
+        Assert.NotNull(newChallenge.SentAt);
         Assert.Equal(1, emailService.CallCount);
         Assert.Equal(user.Email, Assert.Single(emailService.Messages).RecipientEmail);
         Assert.Equal(newChallenge.Id, resend.Response!.ChallengeId);
@@ -51,7 +52,7 @@ public class ResendOtpTests
             Otp = emailService.Messages[0].Otp
         });
 
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, oldOtp.Status);
+        Assert.Equal(VerifyOtpStatus.NotCurrent, oldOtp.Status);
         Assert.Null(oldOtp.Response);
         Assert.Equal(VerifyOtpStatus.Success, newOtp.Status);
         Assert.NotNull(newOtp.Response);
@@ -91,6 +92,49 @@ public class ResendOtpTests
         Assert.Equal(ResendOtpStatus.Success, result.Status);
         Assert.Equal(2, await context.OtpChallenges.CountAsync());
         Assert.Equal(1, emailService.CallCount);
+    }
+
+    [Fact]
+    public async Task ResendCooldown_IsMeasuredFromSuccessfulSendTime()
+    {
+        await using var context = CreateContext();
+        var otpService = CreateOtpService();
+        var emailService = new FakeEmailService();
+        var user = await AddUserAsync(context);
+        var challenge = await AddChallengeAsync(
+            context,
+            otpService,
+            user,
+            "004821",
+            FixedNow.AddMinutes(-5),
+            sentAt: FixedNow.AddSeconds(-59));
+
+        var result = await CreateAuthService(context, otpService, emailService).ResendOtpAsync(
+            new ResendOtpRequest { ChallengeId = challenge.Id });
+
+        Assert.Equal(ResendOtpStatus.Cooldown, result.Status);
+        Assert.Equal(1, result.RetryAfterSeconds);
+        Assert.Equal(0, emailService.CallCount);
+    }
+
+    [Fact]
+    public async Task PendingChallenge_CannotUseResendBeforeFirstSend()
+    {
+        await using var context = CreateContext();
+        var otpService = CreateOtpService();
+        var emailService = new FakeEmailService();
+        var user = await AddUserAsync(context);
+        var pending = otpService.CreatePendingLoginChallenge(user, FixedNow.AddMinutes(-2));
+        context.OtpChallenges.Add(pending);
+        await context.SaveChangesAsync();
+
+        var result = await CreateAuthService(context, otpService, emailService).ResendOtpAsync(
+            new ResendOtpRequest { ChallengeId = pending.Id });
+
+        Assert.Equal(ResendOtpStatus.NotAvailable, result.Status);
+        Assert.Equal(0, emailService.CallCount);
+        Assert.Single(context.OtpChallenges);
+        Assert.False(pending.IsRevoked);
     }
 
     [Fact]
@@ -265,7 +309,8 @@ public class ResendOtpTests
         short attemptCount = 0,
         DateTimeOffset? expiresAt = null,
         short resendCount = 0,
-        DateTimeOffset? flowExpiresAt = null)
+        DateTimeOffset? flowExpiresAt = null,
+        DateTimeOffset? sentAt = null)
     {
         var challenge = new OtpChallenge
         {
@@ -274,6 +319,7 @@ public class ResendOtpTests
             AuthenticationFlowId = Guid.NewGuid(),
             Purpose = "LOGIN",
             CreatedAt = createdAt,
+            SentAt = sentAt ?? createdAt,
             ExpiresAt = expiresAt ?? createdAt.AddMinutes(3),
             FlowExpiresAt = flowExpiresAt ?? FixedNow.AddMinutes(8),
             AttemptCount = attemptCount,

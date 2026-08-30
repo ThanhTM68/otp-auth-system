@@ -38,7 +38,7 @@ public class OtpServiceTests
 
         challenge.OtpHash = service.HashOtp(challenge, otp);
 
-        Assert.Equal(32, challenge.OtpHash.Length);
+        Assert.Equal(32, challenge.OtpHash!.Length);
         Assert.False(challenge.OtpHash.SequenceEqual(Encoding.UTF8.GetBytes(otp)));
         Assert.True(service.VerifyOtp(challenge, otp));
         Assert.False(service.VerifyOtp(challenge, "004822"));
@@ -46,22 +46,40 @@ public class OtpServiceTests
     }
 
     [Fact]
-    public void CreateLoginChallenge_InitializesSecureLifecycleState()
+    public void CreatePendingLoginChallenge_DoesNotGenerateOtpBeforeExplicitSend()
     {
         var service = CreateService();
-        var challenge = service.CreateLoginChallenge(CreateUser(), FixedNow).Challenge;
+        var challenge = service.CreatePendingLoginChallenge(CreateUser(), FixedNow);
 
         Assert.Equal("LOGIN", challenge.Purpose);
         Assert.Equal(FixedNow, challenge.CreatedAt);
-        Assert.Equal(FixedNow.AddMinutes(3), challenge.ExpiresAt);
+        Assert.Null(challenge.OtpHash);
+        Assert.Null(challenge.SentAt);
+        Assert.Null(challenge.ExpiresAt);
         Assert.Equal(FixedNow.AddMinutes(10), challenge.FlowExpiresAt);
         Assert.Equal((short)0, challenge.AttemptCount);
         Assert.Equal((short)5, challenge.MaxAttempts);
         Assert.Equal((short)0, challenge.ResendCount);
         Assert.Null(challenge.ConsumedAt);
         Assert.False(challenge.IsRevoked);
-        Assert.Equal(32, challenge.OtpHash.Length);
-        Assert.True(service.IsUsable(challenge, FixedNow));
+        Assert.False(service.IsUsable(challenge, FixedNow));
+    }
+
+    [Fact]
+    public void PrepareFirstSend_GeneratesHashedOtpAndStartsExpiryWithoutMarkingEmailSent()
+    {
+        var service = CreateService();
+        var challenge = service.CreatePendingLoginChallenge(CreateUser(), FixedNow.AddMinutes(-1));
+
+        var result = service.PrepareFirstSend(challenge, FixedNow);
+
+        Assert.Same(challenge, result.Challenge);
+        Assert.Matches("^[0-9]{6}$", result.Otp);
+        Assert.Equal(32, challenge.OtpHash!.Length);
+        Assert.True(service.VerifyOtp(challenge, result.Otp));
+        Assert.Null(challenge.SentAt);
+        Assert.Equal(FixedNow.AddMinutes(3), challenge.ExpiresAt);
+        Assert.False(service.IsUsable(challenge, FixedNow));
     }
 
     [Fact]
@@ -70,9 +88,9 @@ public class OtpServiceTests
         var service = CreateService();
         var challenge = CreateChallenge();
 
-        Assert.False(service.IsExpired(challenge, challenge.ExpiresAt.AddTicks(-1)));
-        Assert.True(service.IsExpired(challenge, challenge.ExpiresAt));
-        Assert.False(service.IsUsable(challenge, challenge.ExpiresAt));
+        Assert.False(service.IsExpired(challenge, challenge.ExpiresAt!.Value.AddTicks(-1)));
+        Assert.True(service.IsExpired(challenge, challenge.ExpiresAt.Value));
+        Assert.False(service.IsUsable(challenge, challenge.ExpiresAt.Value));
     }
 
     [Fact]
@@ -136,6 +154,7 @@ public class OtpServiceTests
         AuthenticationFlowId = Guid.Parse("91f89c54-6ebf-45f9-b1d2-3a41d24c8fc0"),
         Purpose = "LOGIN",
         CreatedAt = FixedNow,
+        SentAt = FixedNow,
         ExpiresAt = FixedNow.AddMinutes(3),
         FlowExpiresAt = FixedNow.AddMinutes(10),
         MaxAttempts = 5,

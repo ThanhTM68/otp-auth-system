@@ -77,18 +77,22 @@ dotnet test
 dotnet run --project .\src\OTPAuth.API
 ```
 
-Sau khi chạy, mở URL được hiển thị trong terminal.
+Profile mặc định hiện phục vụ HTTP tại `http://localhost:5011`. Có thể chạy rõ profile:
 
-Swagger thường tại:
+```powershell
+dotnet run --project .\src\OTPAuth.API --launch-profile http
+```
+
+Swagger:
 
 ```text
-https://localhost:<PORT>/swagger
+http://localhost:5011/swagger
 ```
 
 Frontend:
 
 ```text
-https://localhost:<PORT>/
+http://localhost:5011/
 ```
 
 ## 6. Luồng sử dụng
@@ -96,11 +100,15 @@ https://localhost:<PORT>/
 ```text
 Đăng ký
 → Đăng nhập Email + Password
-→ Nhận OTP qua Gmail
+→ Password đúng: nhận pending challenge, chưa có OTP/JWT
+→ Bấm “Gửi mã xác thực”
+→ Server sinh OTP và gửi qua Gmail
 → Nhập OTP
 → Nhận JWT
 → Truy cập trang/API được bảo vệ
 ```
+
+`POST /api/auth/login` không gọi SMTP. Endpoint chỉ xác minh password, thu hồi pending challenge cũ và trả `challengeId`, `requiresOtp: true`, `otpSent: false`, email đã mask và hạn của pre-auth flow. `POST /api/auth/send-otp` chỉ nhận `challengeId`; server tự lấy người nhận từ challenge. Xác thực chỉ hoàn tất sau khi `POST /api/auth/verify-otp` consume OTP hợp lệ và cấp JWT.
 
 ## 7. Lỗi thường gặp
 

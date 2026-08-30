@@ -18,7 +18,7 @@ public class AuditLoggingTests
     private static readonly byte[] JwtSigningKey = Enumerable.Range(32, 32).Select(index => (byte)index).ToArray();
 
     [Fact]
-    public async Task Login_RecordsSuccessFailureAndOtpCreatedWithoutSensitiveFields()
+    public async Task Login_RecordsPasswordEventsWithoutClaimingOtpWasCreated()
     {
         await using var context = CreateContext();
         var user = await AddUserAsync(context, "student@example.com", "ValidPassword123!");
@@ -40,7 +40,59 @@ public class AuditLoggingTests
         Assert.Equal(LoginStatus.Success, successful.Status);
         Assert.Contains(events, audit => audit.EventType == AuditEventTypes.LoginPasswordFailed && !audit.Success && audit.UserId == user.Id);
         Assert.Contains(events, audit => audit.EventType == AuditEventTypes.LoginPasswordSuccess && audit.Success && audit.UserId == user.Id);
-        Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpCreated && audit.Success && audit.UserId == user.Id);
+        Assert.DoesNotContain(events, audit => audit.EventType == AuditEventTypes.OtpCreated);
+        AssertAuditLogHasNoSensitiveProperties();
+    }
+
+    [Fact]
+    public async Task FirstSend_RecordsRequestedCreatedAndSentWithoutSensitiveFields()
+    {
+        await using var context = CreateContext();
+        var user = await AddUserAsync(context, "student@example.com", "ValidPassword123!");
+        var service = CreateAuthService(context, new FakeEmailService());
+        var login = await service.LoginAsync(new LoginRequest
+        {
+            Email = user.Email,
+            Password = "ValidPassword123!"
+        });
+
+        var sent = await service.SendOtpAsync(new SendOtpRequest { ChallengeId = login.Response!.ChallengeId });
+
+        var events = await context.AuditLogs
+            .Where(audit => audit.OtpChallengeId == login.Response.ChallengeId)
+            .ToListAsync();
+        Assert.Equal(SendOtpStatus.Success, sent.Status);
+        Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpSendRequested);
+        Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpCreated);
+        Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpSent && audit.Success);
+        AssertAuditLogHasNoSensitiveProperties();
+    }
+
+    [Fact]
+    public async Task FirstSendFailure_RecordsSafeDeliveryFailureWithoutSentEvent()
+    {
+        await using var context = CreateContext();
+        var user = await AddUserAsync(context, "student@example.com", "ValidPassword123!");
+        var service = CreateAuthService(context, new FakeEmailService(shouldFail: true));
+        var login = await service.LoginAsync(new LoginRequest
+        {
+            Email = user.Email,
+            Password = "ValidPassword123!"
+        });
+
+        var result = await service.SendOtpAsync(
+            new SendOtpRequest { ChallengeId = login.Response!.ChallengeId });
+
+        var events = await context.AuditLogs
+            .Where(audit => audit.OtpChallengeId == login.Response.ChallengeId)
+            .ToListAsync();
+        Assert.Equal(SendOtpStatus.EmailDeliveryFailure, result.Status);
+        Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpSendRequested);
+        Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpCreated);
+        Assert.Contains(events, audit =>
+            audit.EventType == AuditEventTypes.OtpDeliveryFailed &&
+            audit.ReasonCode == AuditReasonCodes.DeliveryFailed);
+        Assert.DoesNotContain(events, audit => audit.EventType == AuditEventTypes.OtpSent);
         AssertAuditLogHasNoSensitiveProperties();
     }
 
@@ -60,7 +112,7 @@ public class AuditLoggingTests
         var events = await context.AuditLogs.Where(audit => audit.OtpChallengeId == challenge.Id).ToListAsync();
         Assert.Equal(VerifyOtpStatus.VerificationFailed, wrong.Status);
         Assert.Equal(VerifyOtpStatus.Success, correct.Status);
-        Assert.Equal(VerifyOtpStatus.VerificationFailed, replay.Status);
+        Assert.Equal(VerifyOtpStatus.NotCurrent, replay.Status);
         Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpVerifyFailed && audit.ReasonCode == AuditReasonCodes.OtpMismatch);
         Assert.Contains(events, audit => audit.EventType == AuditEventTypes.OtpVerifySuccess && audit.Success);
         Assert.Contains(events, audit => audit.EventType == AuditEventTypes.JwtIssued && audit.Success);
@@ -187,6 +239,7 @@ public class AuditLoggingTests
             AuthenticationFlowId = Guid.NewGuid(),
             Purpose = "LOGIN",
             CreatedAt = createdAt ?? FixedNow.AddMinutes(-1),
+            SentAt = createdAt ?? FixedNow.AddMinutes(-1),
             ExpiresAt = FixedNow.AddMinutes(2),
             FlowExpiresAt = FixedNow.AddMinutes(9),
             MaxAttempts = 5,

@@ -186,6 +186,8 @@ builder.Services.AddRateLimiter(options =>
         CreateFixedWindowPartition(context, rateLimitOptions.Register));
     options.AddPolicy(AuthenticationRateLimitPolicies.Login, context =>
         CreateFixedWindowPartition(context, rateLimitOptions.Login));
+    options.AddPolicy(AuthenticationRateLimitPolicies.SendOtp, context =>
+        CreateFixedWindowPartition(context, rateLimitOptions.SendOtp));
     options.AddPolicy(AuthenticationRateLimitPolicies.VerifyOtp, context =>
         CreateFixedWindowPartition(context, rateLimitOptions.VerifyOtp));
     options.AddPolicy(AuthenticationRateLimitPolicies.ResendOtp, context =>

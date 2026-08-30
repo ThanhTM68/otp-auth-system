@@ -198,66 +198,107 @@
                 </p>
             </section>
 
-            <section class="view otp-view" data-view="otp" aria-labelledby="otp-title" hidden>
-                <div class="view-symbol" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" focusable="false">
-                        <rect x="3" y="5" width="18" height="14" rx="3"></rect>
-                        <path d="m5 8 7 5 7-5"></path>
-                        <path d="M17.5 3.5v3M16 5h3"></path>
-                    </svg>
-                </div>
-                <div class="view-heading centered">
-                    <p class="step-label">Bước 2 / 3</p>
-                    <h2 id="otp-title" tabindex="-1">Nhập mã xác thực</h2>
-                    <p>Mã OTP gồm 6 chữ số đã được gửi đến <strong id="otp-destination">email của bạn</strong>.</p>
-                </div>
+            <section class="view otp-view" data-view="otp" aria-label="Xác thực OTP" hidden>
+                <div class="otp-state-shell">
+                    <section class="otp-state otp-pending-state" data-otp-state="pending"
+                             aria-labelledby="otp-pending-title">
+                        <div class="view-symbol" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M12 3 19 6v5c0 4.4-2.8 8.2-7 9.8C7.8 19.2 5 15.4 5 11V6l7-3Z"></path>
+                                <path d="m9 12 2 2 4-4"></path>
+                            </svg>
+                        </div>
+                        <div class="view-heading centered">
+                            <p class="step-label">Bước 2 / 3</p>
+                            <h2 id="otp-pending-title" tabindex="-1">Xác thực tài khoản</h2>
+                            <p>Thông tin đăng nhập đã được xác minh.</p>
+                            <p>Để tiếp tục, hãy gửi mã OTP đến email của bạn.</p>
+                        </div>
 
-                <div class="timer-panel" aria-label="Thời gian hiệu lực và gửi lại mã">
-                    <div class="timer-item timer-item-primary">
-                        <span class="timer-icon" aria-hidden="true">
-                            <svg viewBox="0 0 20 20" focusable="false"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4l2.5 1.5"></path></svg>
-                        </span>
-                        <p id="otp-timer-message">
-                            <span id="otp-timer-label">Mã hết hạn sau</span>
-                            <strong id="otp-countdown">03:00</strong>
+                        <div class="otp-destination-card">
+                            <span>Mã xác thực sẽ được gửi đến</span>
+                            <strong id="pending-otp-destination">email của bạn</strong>
+                        </div>
+
+                        <button id="send-otp-button" class="primary-button" type="button"
+                                data-idle-text="Gửi mã xác thực"
+                                data-loading-text="Đang gửi mã xác thực...">Gửi mã xác thực</button>
+                        <p id="otp-send-progress" class="otp-send-progress" role="status"
+                           aria-live="polite" aria-atomic="true" hidden>
+                            Quá trình này có thể mất vài giây.
                         </p>
-                    </div>
-                    <div class="timer-item">
-                        <span class="timer-icon" aria-hidden="true">
-                            <svg viewBox="0 0 20 20" focusable="false"><path d="M15.8 6.5A7 7 0 1 0 17 10M15.8 3v3.5h-3.5"></path></svg>
-                        </span>
-                        <p id="resend-timer-message">
-                            <span id="resend-timer-label">Có thể gửi lại sau</span>
-                            <strong id="resend-countdown">60 giây</strong><span id="resend-period" aria-hidden="true"></span>
-                        </p>
-                    </div>
-                </div>
-                <p id="otp-expiry-status" class="visually-hidden" role="status"
-                   aria-live="polite" aria-atomic="true"></p>
 
-                <form id="otp-form" method="post" action="/api/auth/verify-otp" novalidate>
-                    <div class="field-group otp-field-group">
-                        <label for="otp-input">Mã OTP</label>
-                        <input id="otp-input" class="otp-input" name="otp" type="text"
-                               inputmode="numeric" autocomplete="one-time-code" maxlength="6"
-                               pattern="[0-9]{6}" placeholder="000000" enterkeyhint="done" spellcheck="false"
-                               aria-describedby="otp-input-error" required>
-                        <small id="otp-input-error" class="field-error" aria-live="polite"></small>
-                    </div>
+                        <div class="otp-actions otp-pending-actions">
+                            <button class="back-button" type="button" data-cancel-otp>
+                                <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m12.5 5-5 5 5 5"></path></svg>
+                                Quay lại đăng nhập
+                            </button>
+                        </div>
+                    </section>
 
-                    <button class="primary-button" type="submit" data-idle-text="Xác nhận mã"
-                            data-loading-text="Đang xác thực...">Xác nhận mã</button>
-                </form>
+                    <section class="otp-state otp-sent-state" data-otp-state="sent"
+                             aria-labelledby="otp-title" hidden>
+                        <div class="view-symbol" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <rect x="3" y="5" width="18" height="14" rx="3"></rect>
+                                <path d="m5 8 7 5 7-5"></path>
+                                <path d="M17.5 3.5v3M16 5h3"></path>
+                            </svg>
+                        </div>
+                        <div class="view-heading centered">
+                            <p class="step-label">Bước 2 / 3</p>
+                            <h2 id="otp-title" tabindex="-1">Nhập mã xác thực</h2>
+                            <p>Mã OTP gồm 6 chữ số đã được gửi đến <strong id="otp-destination">email của bạn</strong>.</p>
+                        </div>
 
-                <div class="otp-actions">
-                    <p>Chưa nhận được mã?
-                        <button id="resend-button" class="text-button resend-button" type="button"
-                                data-idle-text="Gửi lại mã" data-loading-text="Đang gửi mã mới...">Gửi lại mã</button>
-                    </p>
-                    <button class="back-button" type="button" data-cancel-otp>
-                        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m12.5 5-5 5 5 5"></path></svg>
-                        Quay lại đăng nhập
-                    </button>
+                        <div id="timer-panel" class="timer-panel" aria-label="Thời gian hiệu lực và gửi lại mã">
+                            <div class="timer-item timer-item-primary">
+                                <span class="timer-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 20 20" focusable="false"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4l2.5 1.5"></path></svg>
+                                </span>
+                                <p id="otp-timer-message">
+                                    <span id="otp-timer-label">Mã hết hạn sau</span>
+                                    <strong id="otp-countdown">00:00</strong>
+                                </p>
+                            </div>
+                            <div id="resend-timer-item" class="timer-item">
+                                <span class="timer-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 20 20" focusable="false"><path d="M15.8 6.5A7 7 0 1 0 17 10M15.8 3v3.5h-3.5"></path></svg>
+                                </span>
+                                <p id="resend-timer-message">
+                                    <span id="resend-timer-label">Có thể gửi lại sau</span>
+                                    <strong id="resend-countdown">0 giây</strong><span id="resend-period" aria-hidden="true"></span>
+                                </p>
+                            </div>
+                        </div>
+                        <p id="otp-expiry-status" class="visually-hidden" role="status"
+                           aria-live="polite" aria-atomic="true"></p>
+
+                        <form id="otp-form" method="post" action="/api/auth/verify-otp" novalidate>
+                            <div class="field-group otp-field-group">
+                                <label for="otp-input">Mã OTP</label>
+                                <input id="otp-input" class="otp-input" name="otp" type="text"
+                                       inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                                       pattern="[0-9]{6}" placeholder="000000" enterkeyhint="done" spellcheck="false"
+                                       aria-describedby="otp-input-error" required>
+                                <small id="otp-input-error" class="field-error" aria-live="polite"></small>
+                            </div>
+
+                            <button class="primary-button" type="submit" data-idle-text="Xác nhận mã"
+                                    data-loading-text="Đang xác thực...">Xác nhận mã</button>
+                        </form>
+
+                        <div class="otp-actions">
+                            <p>Chưa nhận được mã?
+                                <button id="resend-button" class="text-button resend-button" type="button"
+                                        data-idle-text="Gửi lại mã" data-loading-text="Đang gửi mã mới...">Gửi lại mã</button>
+                            </p>
+                            <button class="back-button" type="button" data-cancel-otp>
+                                <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m12.5 5-5 5 5 5"></path></svg>
+                                Quay lại đăng nhập
+                            </button>
+                        </div>
+                    </section>
                 </div>
             </section>
 

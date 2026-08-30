@@ -11,6 +11,7 @@ public class RateLimitingTests
     [Theory]
     [InlineData("/api/auth/register", 5)]
     [InlineData("/api/auth/login", 5)]
+    [InlineData("/api/auth/send-otp", 3)]
     [InlineData("/api/auth/verify-otp", 10)]
     [InlineData("/api/auth/resend-otp", 3)]
     public async Task SensitiveEndpoint_Returns429AfterItsConfiguredLimit(string path, int permitLimit)
@@ -33,6 +34,7 @@ public class RateLimitingTests
         Assert.Contains("RATE_LIMITED", body, StringComparison.Ordinal);
         Assert.DoesNotContain("register", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("login", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("send-otp", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("verify-otp", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("resend-otp", body, StringComparison.OrdinalIgnoreCase);
     }
@@ -67,6 +69,22 @@ public class RateLimitingTests
         using var registerResponse = await client.PostAsJsonAsync("/api/auth/register", new { });
 
         Assert.Equal(HttpStatusCode.BadRequest, registerResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task SendOtpLimit_DoesNotConsumeResendPolicy()
+    {
+        using var factory = CreateFactory();
+        using var client = CreateHttpsClient(factory);
+
+        for (var request = 0; request < 4; request++)
+        {
+            using var _ = await client.PostAsJsonAsync("/api/auth/send-otp", new { });
+        }
+
+        using var resendResponse = await client.PostAsJsonAsync("/api/auth/resend-otp", new { });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resendResponse.StatusCode);
     }
 
     private static HttpClient CreateHttpsClient(WebApplicationFactory<global::Program> factory) =>

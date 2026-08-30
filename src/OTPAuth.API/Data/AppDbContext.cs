@@ -32,16 +32,25 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.ToTable("OtpChallenges", table =>
             {
                 table.HasCheckConstraint("CK_OtpChallenges_Purpose", "[Purpose] = 'LOGIN'");
-                table.HasCheckConstraint("CK_OtpChallenges_ExpiresAt", "[ExpiresAt] > [CreatedAt] AND [ExpiresAt] <= [FlowExpiresAt]");
+                table.HasCheckConstraint("CK_OtpChallenges_ExpiresAt", "[ExpiresAt] IS NULL OR ([ExpiresAt] > [CreatedAt] AND [ExpiresAt] <= [FlowExpiresAt])");
                 table.HasCheckConstraint("CK_OtpChallenges_Attempts", "[AttemptCount] >= 0 AND [AttemptCount] <= [MaxAttempts] AND [MaxAttempts] BETWEEN 1 AND 5");
                 table.HasCheckConstraint("CK_OtpChallenges_ResendCount", "[ResendCount] BETWEEN 0 AND 3");
+                table.HasCheckConstraint(
+                    "CK_OtpChallenges_OtpState",
+                    "([OtpHash] IS NULL AND [ExpiresAt] IS NULL AND [SentAt] IS NULL) OR " +
+                    "([OtpHash] IS NOT NULL AND DATALENGTH([OtpHash]) = 32 AND [ExpiresAt] IS NOT NULL AND " +
+                    "([SentAt] IS NULL OR ([SentAt] >= [CreatedAt] AND [SentAt] < [ExpiresAt])))");
+                table.HasCheckConstraint(
+                    "CK_OtpChallenges_ConsumedState",
+                    "[ConsumedAt] IS NULL OR ([SentAt] IS NOT NULL AND [ConsumedAt] >= [SentAt] AND [ConsumedAt] < [ExpiresAt])");
             });
             entity.HasKey(challenge => challenge.Id);
-            entity.Property(challenge => challenge.OtpHash).HasColumnType("varbinary(32)").IsRequired();
+            entity.Property(challenge => challenge.OtpHash).HasColumnType("varbinary(32)");
             entity.Property(challenge => challenge.Purpose).HasMaxLength(32).IsUnicode(false).IsRequired();
             entity.Property(challenge => challenge.CreatedAt).HasPrecision(7).IsRequired();
-            entity.Property(challenge => challenge.ExpiresAt).HasPrecision(7).IsRequired();
+            entity.Property(challenge => challenge.ExpiresAt).HasPrecision(7);
             entity.Property(challenge => challenge.FlowExpiresAt).HasPrecision(7).IsRequired();
+            entity.Property(challenge => challenge.SentAt).HasPrecision(7);
             entity.Property(challenge => challenge.ConsumedAt).HasPrecision(7);
             entity.Property(challenge => challenge.MaxAttempts).HasDefaultValue((short)5);
             entity.Property(challenge => challenge.RowVersion).IsRowVersion();

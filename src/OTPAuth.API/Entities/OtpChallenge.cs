@@ -5,11 +5,12 @@ public class OtpChallenge
     public Guid Id { get; set; }
     public Guid UserId { get; set; }
     public Guid AuthenticationFlowId { get; set; }
-    public byte[] OtpHash { get; set; } = Array.Empty<byte>();
+    public byte[]? OtpHash { get; set; }
     public string Purpose { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
-    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? ExpiresAt { get; set; }
     public DateTimeOffset FlowExpiresAt { get; set; }
+    public DateTimeOffset? SentAt { get; set; }
     public DateTimeOffset? ConsumedAt { get; set; }
     public short AttemptCount { get; set; }
     public short MaxAttempts { get; set; } = 5;

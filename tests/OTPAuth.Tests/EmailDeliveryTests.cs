@@ -17,7 +17,7 @@ public class EmailDeliveryTests
     private static readonly DateTimeOffset FixedNow = new(2026, 8, 23, 10, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task ValidLogin_CreatesChallengeAndDeliversMatchingOtpOnce()
+    public async Task ValidPendingChallenge_FirstSendDeliversMatchingOtpOnce()
     {
         await using var context = CreateContext();
         var user = await AddUserAsync(context, "student@example.com", "ValidPassword123!");
@@ -25,68 +25,142 @@ public class EmailDeliveryTests
         var emailService = new FakeEmailService();
         var authService = CreateAuthService(context, otpService, emailService);
 
-        var result = await authService.LoginAsync(new LoginRequest
+        var login = await authService.LoginAsync(new LoginRequest
         {
             Email = user.Email,
             Password = "ValidPassword123!"
         });
 
+        Assert.Equal(LoginStatus.Success, login.Status);
+        Assert.Equal(0, emailService.CallCount);
+
+        var result = await authService.SendOtpAsync(new SendOtpRequest
+        {
+            ChallengeId = login.Response!.ChallengeId
+        });
+
         var challenge = await context.OtpChallenges.SingleAsync();
         var email = Assert.Single(emailService.Messages);
 
-        Assert.Equal(LoginStatus.Success, result.Status);
+        Assert.Equal(SendOtpStatus.Success, result.Status);
         Assert.Equal(1, emailService.CallCount);
         Assert.Equal(user.Email, email.RecipientEmail);
         Assert.Matches(new Regex("^[0-9]{6}$"), email.Otp);
         Assert.Equal(challenge.ExpiresAt, email.ExpiresAt);
+        Assert.NotNull(challenge.SentAt);
+        Assert.True(result.Response!.OtpSent);
         Assert.True(otpService.VerifyOtp(challenge, email.Otp));
         Assert.Null(result.Response!.GetType().GetProperty("Otp"));
         Assert.Null(result.Response.GetType().GetProperty("AccessToken"));
     }
 
     [Fact]
-    public async Task EmailDeliveryFailure_RevokesChallengeAndDoesNotReturnSuccess()
+    public async Task FirstSend_EmailDeliveryFailure_RevokesChallengeAndDoesNotReturnSuccess()
     {
         await using var context = CreateContext();
         await AddUserAsync(context, "student@example.com", "ValidPassword123!");
         var emailService = new FakeEmailService(shouldFail: true);
         var authService = CreateAuthService(context, CreateOtpService(), emailService);
 
-        var result = await authService.LoginAsync(new LoginRequest
+        var login = await authService.LoginAsync(new LoginRequest
         {
             Email = "student@example.com",
             Password = "ValidPassword123!"
         });
+        var result = await authService.SendOtpAsync(new SendOtpRequest
+        {
+            ChallengeId = login.Response!.ChallengeId
+        });
 
         var challenge = await context.OtpChallenges.SingleAsync();
 
-        Assert.Equal(LoginStatus.EmailDeliveryFailure, result.Status);
+        Assert.Equal(SendOtpStatus.EmailDeliveryFailure, result.Status);
+        Assert.Null(result.Response);
+        Assert.Equal(1, emailService.CallCount);
+        Assert.True(challenge.IsRevoked);
+        Assert.Null(challenge.SentAt);
+    }
+
+    [Fact]
+    public async Task FirstSend_WhenOtpExpiresDuringEmailDelivery_RevokesChallengeAndDoesNotReturnSuccess()
+    {
+        await using var context = CreateContext();
+        await AddUserAsync(context, "student@example.com", "ValidPassword123!");
+        var emailService = new FakeEmailService();
+        var timeProvider = new SequenceTimeProvider(FixedNow, FixedNow, FixedNow.AddMinutes(3));
+        var authService = CreateAuthService(context, CreateOtpService(), emailService, timeProvider);
+
+        var login = await authService.LoginAsync(new LoginRequest
+        {
+            Email = "student@example.com",
+            Password = "ValidPassword123!"
+        });
+        var result = await authService.SendOtpAsync(new SendOtpRequest
+        {
+            ChallengeId = login.Response!.ChallengeId
+        });
+
+        var challenge = await context.OtpChallenges.SingleAsync();
+
+        Assert.Equal(SendOtpStatus.EmailDeliveryFailure, result.Status);
         Assert.Null(result.Response);
         Assert.Equal(1, emailService.CallCount);
         Assert.True(challenge.IsRevoked);
     }
 
     [Fact]
-    public async Task Login_WhenOtpExpiresDuringEmailDelivery_RevokesChallengeAndDoesNotReturnSuccess()
+    public async Task FirstSendTwice_IsRejectedAndDoesNotBypassResend()
     {
         await using var context = CreateContext();
         await AddUserAsync(context, "student@example.com", "ValidPassword123!");
         var emailService = new FakeEmailService();
-        var timeProvider = new SequenceTimeProvider(FixedNow, FixedNow.AddMinutes(3));
-        var authService = CreateAuthService(context, CreateOtpService(), emailService, timeProvider);
-
-        var result = await authService.LoginAsync(new LoginRequest
+        var authService = CreateAuthService(context, CreateOtpService(), emailService);
+        var login = await authService.LoginAsync(new LoginRequest
         {
             Email = "student@example.com",
             Password = "ValidPassword123!"
         });
 
-        var challenge = await context.OtpChallenges.SingleAsync();
+        var first = await authService.SendOtpAsync(new SendOtpRequest { ChallengeId = login.Response!.ChallengeId });
+        var second = await authService.SendOtpAsync(new SendOtpRequest { ChallengeId = login.Response.ChallengeId });
 
-        Assert.Equal(LoginStatus.EmailDeliveryFailure, result.Status);
-        Assert.Null(result.Response);
+        Assert.Equal(SendOtpStatus.Success, first.Status);
+        Assert.Equal(SendOtpStatus.NotAvailable, second.Status);
+        Assert.Null(second.Response);
         Assert.Equal(1, emailService.CallCount);
-        Assert.True(challenge.IsRevoked);
+        Assert.Single(context.OtpChallenges);
+    }
+
+    [Fact]
+    public async Task InvalidRevokedOrConsumedPendingChallenge_CannotSendOtp()
+    {
+        await using var context = CreateContext();
+        await AddUserAsync(context, "student@example.com", "ValidPassword123!");
+        var emailService = new FakeEmailService();
+        var authService = CreateAuthService(context, CreateOtpService(), emailService);
+        var firstLogin = await authService.LoginAsync(new LoginRequest
+        {
+            Email = "student@example.com",
+            Password = "ValidPassword123!"
+        });
+        var revokedId = firstLogin.Response!.ChallengeId;
+        var secondLogin = await authService.LoginAsync(new LoginRequest
+        {
+            Email = "student@example.com",
+            Password = "ValidPassword123!"
+        });
+        var consumed = await context.OtpChallenges.SingleAsync(challenge => challenge.Id == secondLogin.Response!.ChallengeId);
+        consumed.ConsumedAt = FixedNow;
+        await context.SaveChangesAsync();
+
+        var missing = await authService.SendOtpAsync(new SendOtpRequest { ChallengeId = Guid.NewGuid() });
+        var revoked = await authService.SendOtpAsync(new SendOtpRequest { ChallengeId = revokedId });
+        var alreadyConsumed = await authService.SendOtpAsync(new SendOtpRequest { ChallengeId = consumed.Id });
+
+        Assert.Equal(SendOtpStatus.NotAvailable, missing.Status);
+        Assert.Equal(SendOtpStatus.NotAvailable, revoked.Status);
+        Assert.Equal(SendOtpStatus.NotAvailable, alreadyConsumed.Status);
+        Assert.Equal(0, emailService.CallCount);
     }
 
     [Theory]
@@ -115,7 +189,7 @@ public class EmailDeliveryTests
             new DateTimeOffset(2026, 8, 23, 10, 3, 0, TimeSpan.Zero)));
 
         Assert.Contains("004821", body);
-        Assert.Contains("Mã có hiệu lực trong 3 phút", body);
+        Assert.Contains("Mã có hiệu lực đến 10:03:00 UTC", body);
         Assert.Contains("UTC", body);
         Assert.DoesNotContain("Password", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("OtpHash", body, StringComparison.OrdinalIgnoreCase);

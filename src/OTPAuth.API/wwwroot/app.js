@@ -4,6 +4,7 @@
     const api = Object.freeze({
         register: "/api/auth/register",
         login: "/api/auth/login",
+        sendOtp: "/api/auth/send-otp",
         verifyOtp: "/api/auth/verify-otp",
         resendOtp: "/api/auth/resend-otp",
         currentUser: "/api/auth/me"
@@ -11,6 +12,9 @@
     const tokenStorageKey = "otpAuth.accessToken";
     const state = {
         challengeId: null,
+        otpSent: false,
+        maskedEmail: null,
+        flowExpiresAt: null,
         expiresAt: null,
         resendAvailableAt: null,
         timerId: null,
@@ -33,16 +37,23 @@
     const otpForm = document.querySelector("#otp-form");
     const otpInput = document.querySelector("#otp-input");
     const otpSubmitButton = otpForm.querySelector("[type='submit']");
+    const otpPendingState = document.querySelector("[data-otp-state='pending']");
+    const otpSentState = document.querySelector("[data-otp-state='sent']");
+    const pendingOtpDestination = document.querySelector("#pending-otp-destination");
+    const sendOtpButton = document.querySelector("#send-otp-button");
+    const otpSendProgress = document.querySelector("#otp-send-progress");
     const otpDestination = document.querySelector("#otp-destination");
+    const timerPanel = document.querySelector("#timer-panel");
     const otpTimerMessage = document.querySelector("#otp-timer-message");
     const otpTimerLabel = document.querySelector("#otp-timer-label");
     const otpCountdown = document.querySelector("#otp-countdown");
     const resendTimerLabel = document.querySelector("#resend-timer-label");
     const resendCountdown = document.querySelector("#resend-countdown");
     const resendPeriod = document.querySelector("#resend-period");
+    const resendTimerItem = document.querySelector("#resend-timer-item");
     const otpExpiryStatus = document.querySelector("#otp-expiry-status");
     const resendButton = document.querySelector("#resend-button");
-    const cancelOtpButton = document.querySelector("[data-cancel-otp]");
+    const cancelOtpButtons = [...document.querySelectorAll("[data-cancel-otp]")];
     const profileName = document.querySelector("#profile-name");
     const profileEmail = document.querySelector("#profile-email");
     const dashboardGreeting = document.querySelector("#dashboard-greeting");
@@ -80,6 +91,14 @@
                 item.removeAttribute("aria-current");
             }
         });
+    }
+
+    function showOtpState(name) {
+        const isSent = name === "sent";
+        state.otpSent = isSent;
+        otpPendingState.hidden = isSent;
+        otpSentState.hidden = !isSent;
+        otpSendProgress.hidden = true;
     }
 
     function showAlert(message, type = "error") {
@@ -124,15 +143,20 @@
 
     function clearChallenge() {
         state.challengeId = null;
+        state.otpSent = false;
+        state.maskedEmail = null;
+        state.flowExpiresAt = null;
         state.expiresAt = null;
         state.resendAvailableAt = null;
         state.otpActionInProgress = false;
         state.expiryAnnounced = false;
+        pendingOtpDestination.textContent = "email của bạn";
         otpDestination.textContent = "email của bạn";
         otpExpiryStatus.textContent = "";
         otpInput.value = "";
         clearFieldError(otpInput);
         stopTimer();
+        showOtpState("pending");
     }
 
     function clearSession() {
@@ -166,7 +190,7 @@
     }
 
     function updateTimers() {
-        const hasChallenge = Boolean(state.challengeId);
+        const hasChallenge = Boolean(state.challengeId && state.otpSent && state.expiresAt);
         const now = Date.now();
         const otpSeconds = secondsUntil(state.expiresAt, now);
         const resendSeconds = secondsUntil(state.resendAvailableAt, now);
@@ -176,7 +200,7 @@
 
         if (expiryJustAnnounced) {
             state.expiryAnnounced = true;
-            otpExpiryStatus.textContent = "Mã xác thực đã hết hạn. Bạn có thể yêu cầu mã mới.";
+            otpExpiryStatus.textContent = "Mã xác thực đã hết hạn.";
         } else if (!otpExpired && state.expiryAnnounced) {
             state.expiryAnnounced = false;
             otpExpiryStatus.textContent = "";
@@ -199,26 +223,32 @@
             resendCountdown.textContent = `${resendSeconds} giây`;
             resendCountdown.hidden = false;
             resendPeriod.hidden = false;
+            resendTimerItem.hidden = false;
+            timerPanel.classList.remove("resend-ready");
         } else {
-            resendTimerLabel.textContent = "Có thể gửi lại ngay.";
+            resendTimerLabel.textContent = "Có thể gửi lại ngay";
             resendCountdown.textContent = "";
             resendCountdown.hidden = true;
             resendPeriod.hidden = true;
+            resendTimerItem.hidden = true;
+            timerPanel.classList.add("resend-ready");
         }
 
         otpInput.disabled = !hasChallenge || otpExpired || state.otpActionInProgress;
         otpSubmitButton.disabled = !hasChallenge || otpExpired || state.otpActionInProgress;
         resendButton.disabled = !hasChallenge || resendSeconds > 0 || state.otpActionInProgress;
-        cancelOtpButton.disabled = state.otpActionInProgress;
+        cancelOtpButtons.forEach(button => {
+            button.disabled = state.otpActionInProgress;
+        });
 
-        const resendIdleText = otpExpired ? "Gửi mã mới" : "Gửi lại mã";
+        const resendIdleText = "Gửi lại mã";
         resendButton.dataset.idleText = resendIdleText;
         if (!state.otpActionInProgress) {
             resendButton.textContent = resendIdleText;
         }
 
         if (expiryJustAnnounced && focusWasOnOtpControl) {
-            const focusTarget = resendButton.disabled ? cancelOtpButton : resendButton;
+            const focusTarget = resendButton.disabled ? cancelOtpButtons.at(-1) : resendButton;
             window.requestAnimationFrame(() => focusTarget.focus());
         }
 
@@ -239,18 +269,6 @@
         const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, "0");
         const seconds = (totalSeconds % 60).toString().padStart(2, "0");
         return `${minutes}:${seconds}`;
-    }
-
-    function maskEmail(email) {
-        const separatorIndex = email.indexOf("@");
-        if (separatorIndex <= 0 || separatorIndex === email.length - 1) {
-            return "email của bạn";
-        }
-
-        const localPart = email.slice(0, separatorIndex);
-        const domain = email.slice(separatorIndex + 1);
-        const visibleLength = Math.min(2, localPart.length);
-        return `${localPart.slice(0, visibleLength)}***@${domain}`;
     }
 
     function setFieldError(input, message) {
@@ -418,18 +436,40 @@
             if (error?.status === 429 || error?.code === "RATE_LIMITED") {
                 return "Bạn đã thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.";
             }
-            if (error?.code === "OTP_DELIVERY_UNAVAILABLE") {
+            return "Không thể đăng nhập lúc này. Vui lòng thử lại sau.";
+        }
+
+        if (context === "send") {
+            if (error?.status === 429 || error?.code === "RATE_LIMITED") {
+                return "Bạn đã yêu cầu gửi mã quá nhiều lần. Vui lòng đăng nhập lại sau.";
+            }
+            if (error?.code === "OTP_DELIVERY_UNAVAILABLE" || error?.code === "OTP_SEND_FAILED") {
                 return "Chưa thể gửi mã xác thực. Vui lòng thử lại sau.";
             }
-            return "Không thể đăng nhập lúc này. Vui lòng thử lại sau.";
+            if (error?.code === "OTP_SEND_NOT_AVAILABLE" || error?.code === "OTP_NOT_SENT") {
+                return "Phiên xác thực không còn hiệu lực. Vui lòng đăng nhập lại.";
+            }
+            return "Chưa thể gửi mã xác thực. Vui lòng thử lại sau.";
         }
 
         if (context === "verify") {
             if (error?.status === 429 || error?.code === "RATE_LIMITED") {
                 return "Bạn đã nhập mã quá nhiều lần. Vui lòng thử lại sau.";
             }
+            if (error?.code === "OTP_EXPIRED") {
+                return "Mã xác thực đã hết hạn. Vui lòng yêu cầu mã mới.";
+            }
+            if (error?.code === "OTP_NOT_CURRENT") {
+                return "Mã này không còn hiệu lực. Vui lòng sử dụng mã mới nhất.";
+            }
+            if (error?.code === "OTP_MAX_ATTEMPTS") {
+                return "Bạn đã nhập sai quá số lần cho phép. Vui lòng yêu cầu mã mới.";
+            }
+            if (error?.code === "OTP_NOT_SENT") {
+                return "Mã xác thực chưa được gửi. Vui lòng đăng nhập lại.";
+            }
             if (error?.code === "OTP_VERIFICATION_FAILED" || error?.status === 401) {
-                return "Không thể xác thực mã OTP. Vui lòng kiểm tra mã mới nhất và thử lại.";
+                return "Mã xác thực không chính xác.";
             }
             return "Không thể xác thực mã OTP. Vui lòng thử lại.";
         }
@@ -517,23 +557,70 @@
                 method: "POST",
                 body: JSON.stringify(body)
             });
-            if (!result?.requiresOtp || !result.challengeId || !result.expiresAt || !result.resendAvailableAt) {
+            if (!result?.requiresOtp || !result.challengeId || result.otpSent !== false ||
+                !result.maskedEmail || !result.flowExpiresAt) {
                 throw { status: 500, code: "INTERNAL_ERROR" };
             }
 
             state.challengeId = result.challengeId;
-            state.expiresAt = result.expiresAt;
-            state.resendAvailableAt = result.resendAvailableAt;
-            otpDestination.textContent = maskEmail(email);
+            state.maskedEmail = result.maskedEmail;
+            state.flowExpiresAt = result.flowExpiresAt;
+            pendingOtpDestination.textContent = result.maskedEmail;
+            otpDestination.textContent = result.maskedEmail;
             loginEmailInput.value = "";
+            showOtpState("pending");
             showView("otp", false);
-            startTimer();
-            otpInput.focus();
-            showAlert("Mã xác thực đã được gửi đến email của bạn.", "success");
+            sendOtpButton.focus();
         } catch (error) {
             showAlert(friendlyError(error, "login"));
         } finally {
             setAuthActionBusy(submitButton, false);
+        }
+    });
+
+    sendOtpButton.addEventListener("click", async () => {
+        if (state.otpActionInProgress) {
+            return;
+        }
+        clearAlert();
+        if (!state.challengeId || state.otpSent) {
+            clearChallenge();
+            showView("login");
+            showAlert("Phiên xác thực không còn hiệu lực. Vui lòng đăng nhập lại.");
+            return;
+        }
+
+        setOtpActionBusy(sendOtpButton, true);
+        otpSendProgress.hidden = false;
+
+        try {
+            const result = await request(api.sendOtp, {
+                method: "POST",
+                body: JSON.stringify({ challengeId: state.challengeId })
+            });
+            if (!result?.challengeId || result.otpSent !== true || !result.expiresAt ||
+                !result.resendAvailableAt) {
+                throw { status: 500, code: "SEND_OTP_RESPONSE_INVALID" };
+            }
+
+            state.challengeId = result.challengeId;
+            state.maskedEmail = result.maskedEmail || state.maskedEmail;
+            state.flowExpiresAt = result.flowExpiresAt || state.flowExpiresAt;
+            state.expiresAt = result.expiresAt;
+            state.resendAvailableAt = result.resendAvailableAt;
+            otpDestination.textContent = state.maskedEmail || "email của bạn";
+            showOtpState("sent");
+            startTimer();
+            otpInput.focus();
+            showAlert("Mã xác thực đã được gửi đến email của bạn.", "success");
+        } catch (error) {
+            const message = friendlyError(error, "send");
+            clearChallenge();
+            showView("login");
+            showAlert(message);
+        } finally {
+            setOtpActionBusy(sendOtpButton, false);
+            otpSendProgress.hidden = true;
         }
     });
 
@@ -548,7 +635,7 @@
             return;
         }
         clearAlert();
-        if (!state.challengeId) {
+        if (!state.challengeId || !state.otpSent) {
             showView("login");
             showAlert("Phiên xác thực không còn hiệu lực. Vui lòng đăng nhập lại.");
             return;
@@ -585,7 +672,15 @@
                 showAlert("Không thể hoàn tất đăng nhập. Vui lòng thử đăng nhập lại.");
                 return;
             }
-            showAlert(friendlyError(error, "verify"));
+            const message = friendlyError(error, "verify");
+            if (error?.code === "OTP_NOT_CURRENT" || error?.code === "OTP_MAX_ATTEMPTS" ||
+                error?.code === "OTP_NOT_SENT") {
+                clearChallenge();
+                showView("login");
+                showAlert(message);
+                return;
+            }
+            showAlert(message);
             shouldRefocusOtp = true;
         } finally {
             setOtpActionBusy(otpSubmitButton, false);
@@ -600,7 +695,7 @@
             return;
         }
         clearAlert();
-        if (!state.challengeId) {
+        if (!state.challengeId || !state.otpSent) {
             showView("login");
             showAlert("Phiên xác thực không còn hiệu lực. Vui lòng đăng nhập lại.");
             return;
@@ -618,8 +713,12 @@
             }
 
             state.challengeId = result.challengeId;
+            state.otpSent = true;
+            state.maskedEmail = result.maskedEmail || state.maskedEmail;
+            state.flowExpiresAt = result.flowExpiresAt || state.flowExpiresAt;
             state.expiresAt = result.expiresAt;
             state.resendAvailableAt = result.resendAvailableAt;
+            otpDestination.textContent = state.maskedEmail || "email của bạn";
             otpInput.value = "";
             clearFieldError(otpInput);
             startTimer();
@@ -725,10 +824,12 @@
         });
     });
 
-    cancelOtpButton.addEventListener("click", () => {
-        clearChallenge();
-        showView("login");
-        showAlert("Bạn đã quay lại bước đăng nhập.", "info");
+    cancelOtpButtons.forEach(button => {
+        button.addEventListener("click", () => {
+            clearChallenge();
+            showView("login");
+            showAlert("Bạn đã quay lại bước đăng nhập.", "info");
+        });
     });
 
     document.querySelectorAll("[data-password-toggle]").forEach(button => {

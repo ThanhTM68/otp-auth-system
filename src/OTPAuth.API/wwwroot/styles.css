@@ -133,6 +133,8 @@ body::before {
     background-position: center;
     background-size: cover;
     background-repeat: no-repeat;
+    transform: scale(1.035);
+    transform-origin: center;
 }
 
 .page-shell::before {
@@ -748,6 +750,20 @@ button:disabled {
 }
 
 /* 9. OTP experience */
+.otp-state-shell {
+    min-height: 476px;
+    display: grid;
+}
+
+.otp-state {
+    grid-area: 1 / 1;
+    align-self: center;
+}
+
+.otp-state:not([hidden]) {
+    animation: viewEnter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .view-symbol {
     width: 58px;
     height: 58px;
@@ -775,11 +791,72 @@ button:disabled {
     margin-bottom: 20px;
 }
 
+.otp-pending-state .view-heading {
+    margin-bottom: 18px;
+}
+
+.otp-pending-state .view-heading > p:not(.step-label) {
+    margin: 8px 0 0;
+    color: var(--text-muted);
+    font-size: 0.94rem;
+    line-height: 1.55;
+}
+
+.otp-pending-state .view-heading > p:nth-of-type(2) {
+    color: var(--text-secondary);
+}
+
+.otp-destination-card {
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    display: grid;
+    justify-items: center;
+    gap: 3px;
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    background: var(--surface-soft);
+    text-align: center;
+}
+
+.otp-destination-card span {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+.otp-destination-card strong {
+    color: var(--accent-pale);
+    font-size: 0.91rem;
+    font-weight: 690;
+    overflow-wrap: anywhere;
+}
+
+.otp-send-progress {
+    min-height: 1.35rem;
+    margin: 9px 0 0;
+    color: var(--text-muted);
+    font-size: 0.79rem;
+    line-height: 1.35;
+    text-align: center;
+}
+
+.otp-send-progress[hidden] {
+    display: block;
+    visibility: hidden;
+}
+
+.otp-pending-actions {
+    margin-top: 1px;
+}
+
 .timer-panel {
     margin-bottom: 19px;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 9px;
+}
+
+.timer-panel.resend-ready {
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .timer-item {
@@ -1212,6 +1289,14 @@ footer {
         font-size: 1.85rem;
     }
 
+    .otp-state-shell {
+        min-height: 0;
+    }
+
+    .timer-panel {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
     .timer-item {
         padding: 10px;
         gap: 7px;
@@ -1327,6 +1412,7 @@ footer {
     .auth-card,
     input,
     .timer-item,
+    .otp-destination-card,
     .profile-card,
     .security-note {
         border: 1px solid CanvasText;
@@ -1340,6 +1426,7 @@ footer {
 @media (prefers-reduced-motion: reduce) {
     .auth-card,
     .view:not([hidden]),
+    .otp-state:not([hidden]),
     .success-icon,
     .primary-button[data-busy="true"]::before,
     .secondary-button[data-busy="true"]::before,
