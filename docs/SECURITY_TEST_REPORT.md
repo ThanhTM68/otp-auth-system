@@ -2,7 +2,7 @@
 
 ## 1. Phạm vi và cách chạy
 
-Test project dùng xUnit trên .NET 8. Inventory hiện tại có đúng **105 test cases**:
+Test project dùng xUnit trên .NET 10. Inventory hiện tại có đúng **105 test cases**:
 
 - **101 standard cases**: unit test, EF Core InMemory, HTTP integration với `WebApplicationFactory`, fake email/JWT và kiểm tra static frontend.
 - **4 SQL Server opt-in cases**: chỉ chạy khi `RUN_SQLSERVER_SECURITY_TESTS=1`; nếu không, xUnit đánh dấu bốn case này là skipped.
@@ -23,7 +23,7 @@ Remove-Item Env:\RUN_SQLSERVER_SECURITY_TESTS
 
 Bốn SQL tests dùng record có định danh ngẫu nhiên và cleanup theo `UserId` trong `finally`. Chỉ chạy trên database test/development được phép ghi, không chạy trên production.
 
-Lượt verify cuối PHASE 14 ngày 2026-08-31 có kết quả:
+Lượt verify sau khi nâng cấp .NET 10 ngày 2026-08-31 có kết quả:
 
 - Standard command: **101 passed, 0 failed, 4 SQL opt-in skipped, tổng 105**.
 - Bật `RUN_SQLSERVER_SECURITY_TESTS=1`: **105 passed, 0 failed, 0 skipped**.

@@ -2,7 +2,7 @@
 
 ## 1. Tổng quan
 
-Hệ thống dùng **SQL Server** và **Entity Framework Core 8**. Model hiện tại có ba bảng:
+Hệ thống dùng **SQL Server** và **Entity Framework Core 10**. Model hiện tại có ba bảng:
 
 - `Users`
 - `OtpChallenges`
@@ -250,6 +250,8 @@ Code không chỉ định isolation level `Serializable`; transaction dùng isol
 - `Down` revoke/fill pending rows trước khi khôi phục schema non-null cũ.
 
 Migration files mô tả schema mong muốn của source. Việc một database môi trường cụ thể đã apply tới migration nào cần được xác nhận bằng EF CLI/database, không suy ra chỉ từ file tài liệu.
+
+Hai migration hiện có được tạo ban đầu bằng EF Core 8 và được giữ nguyên như lịch sử migration. Runtime/tooling hiện tại dùng EF Core 10; việc nâng framework không làm thay đổi schema nên không tạo migration mới.
 
 ## 10. Dữ liệu nhạy cảm
 

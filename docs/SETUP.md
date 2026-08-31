@@ -2,12 +2,18 @@
 
 ## 1. Điều kiện cần
 
-- .NET 8 SDK
+- .NET 10 SDK
 - SQL Server đang hoạt động
 - EF Core CLI nếu máy chưa có:
 
 ```powershell
-dotnet tool install --global dotnet-ef
+dotnet tool install --global dotnet-ef --version 10.0.11
+```
+
+Nếu máy đã cài `dotnet-ef` phiên bản cũ, cập nhật thay vì cài mới:
+
+```powershell
+dotnet tool update --global dotnet-ef --version 10.0.11
 ```
 
 - Gmail đã bật 2-Step Verification và có Google App Password nếu chạy gửi OTP thật
@@ -18,6 +24,8 @@ Kiểm tra môi trường:
 dotnet --version
 dotnet ef --version
 ```
+
+Hai lệnh trên phải trả về phiên bản major `10`.
 
 ## 2. Restore project
 

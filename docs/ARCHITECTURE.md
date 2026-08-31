@@ -2,7 +2,7 @@
 
 ## 1. Tổng quan
 
-Hệ thống là một **ASP.NET Core Web API monolith trên .NET 8**. Frontend HTML/CSS/JavaScript tĩnh nằm trong `wwwroot` và được phục vụ cùng origin với API. Backend dùng kiến trúc phân lớp đơn giản:
+Hệ thống là một **ASP.NET Core Web API monolith trên .NET 10**. Frontend HTML/CSS/JavaScript tĩnh nằm trong `wwwroot` và được phục vụ cùng origin với API. Backend dùng kiến trúc phân lớp đơn giản:
 
 ```text
 Browser / Frontend

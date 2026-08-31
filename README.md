@@ -4,8 +4,8 @@ Hệ thống demo xác thực người dùng theo luồng **Email + Password + O
 
 ## Công nghệ chính
 
-- .NET 8 / ASP.NET Core Web API
-- Entity Framework Core 8 + SQL Server
+- .NET 10 / ASP.NET Core Web API
+- Entity Framework Core 10 + SQL Server
 - ASP.NET Core Identity `PasswordHasher<User>`
 - JWT Bearer Authentication (HS256)
 - MailKit + Gmail SMTP
@@ -14,7 +14,7 @@ Hệ thống demo xác thực người dùng theo luồng **Email + Password + O
 
 ## Yêu cầu
 
-- .NET 8 SDK
+- .NET 10 SDK
 - SQL Server
 - EF Core CLI (`dotnet-ef`) để apply migration
 - Gmail đã bật 2-Step Verification và Google App Password nếu muốn gửi OTP thật
