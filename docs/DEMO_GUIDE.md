@@ -1,46 +1,138 @@
-# PHASE 12 - Hướng dẫn demo OTP Authentication
+# Hướng dẫn demo OTP Authentication
 
-## 1. Chuẩn bị
+Tài liệu này dùng để trình bày luồng đã được hiện thực. Chuẩn bị SQL Server, migration, OTP/JWT key và Gmail App Password theo [SETUP.md](SETUP.md) trước khi demo gửi email thật.
 
-1. Khởi động SQL Server instance đã cấu hình và bảo đảm database migration đã được apply.
-2. Cấu hình các giá trị local bằng .NET User Secrets: DefaultConnection, OTP hashing key, JWT signing key và SMTP settings.
-3. Không đặt secret thật trong repository hoặc tài liệu.
-
-## 2. Khởi chạy
+## 1. Khởi chạy
 
 ```powershell
 dotnet run --project .\src\OTPAuth.API --launch-profile http
 ```
 
-Mở `http://localhost:5011/`. Swagger có tại `http://localhost:5011/swagger`. HTTPS vẫn phải được dùng ngoài local development.
+Mở base URL được in trong terminal. UI ở `<BASE_URL>/`; Swagger ở `<BASE_URL>/swagger` trong môi trường Development.
 
-## 3. Luồng demo chính
+## 2. Luồng demo chính
 
-1. Chọn **Đăng ký**, nhập họ tên, email, password và xác nhận password.
-2. Đăng ký thành công rồi dùng email/password vừa tạo để đăng nhập.
-3. Login đúng chuyển ngay sang **State A**: password đã xác minh, email đã mask và nút **Gửi mã xác thực**. Lúc này chưa có OTP/email/JWT.
-4. Bấm **Gửi mã xác thực**. Trong **State B**, CTA bị disable và hiện loading tại nút; timer/form OTP chưa chạy cho tới khi server xác nhận gửi thành công.
-5. Sau response thành công, **State C** hiện thông báo đã gửi, email mask, timer từ `expiresAt`/`resendAvailableAt`, input OTP và nút **Xác nhận mã**.
-6. Lấy OTP từ email, nhập nguyên chuỗi 6 chữ số (kể cả leading zero) và xác nhận.
-7. Chỉ sau verify thành công, Dashboard mới nhận JWT, gọi `GET /api/auth/me` và hiển thị hồ sơ tối thiểu.
-8. Bấm **Đăng xuất** để xóa JWT khỏi `sessionStorage` và trở về Login.
+### Demo 1 — Register
 
-## 4. Các tình huống bảo mật để trình bày
+1. Chọn **Đăng ký** và nhập họ tên, email, password, xác nhận password.
+2. Gửi form.
 
-- **Wrong OTP:** nhập sai mã; UI báo lỗi chung, không vào Dashboard và backend tăng AttemptCount.
-- **Verify trước send:** dùng pending `challengeId` gọi verify qua Swagger; backend trả `OTP_NOT_SENT`, không JWT.
-- **First send twice:** gọi lại `/send-otp` sau lần gửi thành công; backend từ chối và không bypass cooldown.
-- **Expired OTP:** chờ timer về 00:00 rồi verify; backend vẫn là nguồn quyết định cuối cùng và phải từ chối.
-- **Resend:** chờ hết cooldown, gửi lại; UI thay challenge ID mới, reset OTP/timer và mã cũ bị backend từ chối.
-- **Replay:** sau một lần verify thành công, gửi lại challenge/mã cũ bằng Swagger; backend từ chối.
-- **Rate limit:** gửi nhanh vượt quota login/send/verify/resend; UI hiển thị thông báo thao tác quá nhiều.
-- **Refresh OTP page:** refresh ở State A/B/C; UI trở về Login và không tự gửi email mới.
-- **Protected API:** xóa JWT bằng Logout rồi gọi lại `GET /api/auth/me`; request không có Bearer token bị từ chối.
+Kỳ vọng: User được tạo, database chỉ lưu `PasswordHash`; không có OTP hoặc JWT. Có thể kiểm tra độ dài hash mà không in nội dung hash:
 
-## 5. Dữ liệu phía trình duyệt
+```sql
+SELECT Email, LEN(PasswordHash) AS PasswordHashLength, IsActive, CreatedAt
+FROM Users
+WHERE Email = 'EMAIL_DEMO';
+```
 
-- Password và OTP chỉ tồn tại tạm trong input/request, không lưu vào localStorage, sessionStorage, cookie hoặc URL.
-- Challenge ID chỉ giữ trong memory; reload trang sẽ yêu cầu login lại.
-- Password verification success không phải authentication success; JWT chỉ tồn tại sau khi OTP đã sent, verify và consume thành công.
-- JWT chỉ giữ trong sessionStorage của tab, không hiển thị hoặc ghi console.
-- Frontend không chứa JWT secret, OTP hashing key, SMTP credential hoặc connection string.
+### Demo 2 — Password login tạo pending challenge
+
+1. Đăng nhập bằng email/password đúng.
+2. Quan sát UI chuyển ngay sang **State A**.
+
+Kỳ vọng:
+
+- Thông tin đăng nhập đã được xác minh và email được mask.
+- Có nút **Gửi mã xác thực**.
+- Chưa gửi email, chưa có input/timer OTP và chưa cấp JWT.
+- Challenge đang pending: `OtpHash`, `SentAt`, `ExpiresAt` đều `NULL`.
+
+Password sai hoặc email không tồn tại phải trả cùng lỗi chung và không tạo challenge.
+
+### Demo 3 — First send OTP
+
+1. Bấm **Gửi mã xác thực**.
+2. **State B** giữ nguyên card, disable CTA và hiện loading tại nút; không fake success và chưa chạy timer.
+3. Sau khi server xác nhận gửi thành công, **State C** hiện email mask, input OTP, thời hạn và cooldown lấy từ response server.
+
+Kỳ vọng: OTP được gửi tới email mà server lấy từ User của challenge. API chỉ nhận `challengeId`; response không chứa OTP/JWT. Gọi `/send-otp` lần hai trên challenge đã sent phải bị từ chối.
+
+### Demo 4 — OTP success và protected API
+
+1. Nhập nguyên chuỗi OTP 6 chữ số từ email, kể cả chữ số `0` ở đầu.
+2. Bấm **Xác nhận mã**.
+
+Kỳ vọng: challenge được consume một lần, JWT mới được cấp, UI mở Dashboard và gọi `GET /api/auth/me` để hiển thị hồ sơ tối thiểu.
+
+Bấm **Đăng xuất** sẽ xóa JWT khỏi `sessionStorage` và trở về Login. Demo không có endpoint thu hồi token phía server; bản sao token còn hợp lệ tới `exp`.
+
+## 3. Các tình huống bảo mật
+
+| Demo | Cách thực hiện | Kết quả mong đợi |
+|---|---|---|
+| Duplicate email | Đăng ký lại cùng email với khác biệt hoa/thường | Bị từ chối; không có User thứ hai. |
+| Wrong password | Login bằng password sai | Lỗi chung; không challenge, email hay JWT. |
+| Verify trước first send | Dùng pending `challengeId` gọi `/verify-otp` qua Swagger | `OTP_NOT_SENT`; không tăng attempt và không JWT. |
+| Wrong OTP | Nhập OTP sai | Bị từ chối; `AttemptCount` tăng. |
+| Expired OTP | Chờ hết hạn rồi verify | Bị từ chối kể cả mã đúng. |
+| Replay | Verify lại cùng challenge/OTP sau lần thành công | Bị từ chối; không cấp JWT thứ hai. |
+| Resend | Chờ hết cooldown rồi bấm **Gửi lại mã** | Challenge cũ bị revoke, UI nhận challenge ID mới; OTP cũ fail, OTP mới pass. |
+| Max attempts | Nhập sai đủ 5 lần rồi thử mã đúng | Challenge bị revoke; mã đúng sau đó vẫn fail. |
+| Rate limit | Gọi nhanh vượt quota của register/login/send/verify/resend | HTTP `429` kèm lỗi an toàn. |
+| Refresh OTP | Refresh ở State A, B hoặc C | Trở về Login; không tự động gửi email mới. |
+| Protected API | Gọi `/api/auth/me` không có hoặc có JWT không hợp lệ | HTTP `401`; không trả hồ sơ. |
+| Email failure | Dùng cấu hình SMTP không hợp lệ trong môi trường test riêng | Không báo gửi thành công; challenge mới fail closed/revoke. |
+
+## 4. Kiểm tra AuditLogs bằng SQL Server
+
+Chỉ đọc metadata allowlist; không tìm hoặc sao chép password, OTP, hash, JWT hay credential:
+
+```sql
+SELECT TOP (50)
+    EventType,
+    Success,
+    ReasonCode,
+    CreatedAt,
+    UserId,
+    OtpChallengeId
+FROM AuditLogs
+ORDER BY CreatedAt DESC;
+```
+
+Kỳ vọng có các event phù hợp với thao tác vừa demo, ví dụ `REGISTER_SUCCESS`, `LOGIN_PASSWORD_SUCCESS`, `OTP_SEND_REQUESTED`, `OTP_CREATED`, `OTP_SENT`, `OTP_VERIFY_FAILED`, `OTP_VERIFY_SUCCESS` và `JWT_ISSUED`. Schema AuditLog không có cột password, OTP plaintext, OTP hash hoặc JWT.
+
+Có thể kiểm tra trạng thái challenge mà không hiển thị hash:
+
+```sql
+SELECT TOP (20)
+    Id,
+    Purpose,
+    DATALENGTH(OtpHash) AS OtpHashBytes,
+    SentAt,
+    ExpiresAt,
+    ConsumedAt,
+    AttemptCount,
+    MaxAttempts,
+    IsRevoked
+FROM OtpChallenges
+ORDER BY CreatedAt DESC;
+```
+
+## 5. Manual test checklist
+
+Chỉ tick sau khi đã quan sát kết quả trong đúng môi trường demo:
+
+- [ ] Register thành công; database lưu PasswordHash, không lưu password plaintext.
+- [ ] Duplicate normalized email bị chặn.
+- [ ] Login sai bị chặn và không tạo challenge.
+- [ ] Login đúng tạo pending challenge, chưa gửi OTP/JWT.
+- [ ] First send có loading, không double-submit và Gmail nhận OTP.
+- [ ] OTP input giữ được leading zero.
+- [ ] OTP sai bị chặn và AttemptCount tăng.
+- [ ] OTP đúng cấp JWT và Dashboard gọi `/api/auth/me` thành công.
+- [ ] Replay OTP bị chặn.
+- [ ] Resend tuân thủ cooldown và vô hiệu OTP cũ.
+- [ ] MaxAttempts hoạt động; mã đúng sau khi khóa vẫn fail.
+- [ ] OTP hết hạn bị từ chối.
+- [ ] Rate limiting trả HTTP 429.
+- [ ] Refresh OTP page không tự gửi email.
+- [ ] Logout xóa JWT khỏi `sessionStorage`.
+- [ ] AuditLogs ghi đúng event và không chứa dữ liệu nhạy cảm.
+- [ ] OtpChallenges không lưu OTP plaintext.
+
+## 6. Dữ liệu phía trình duyệt
+
+- Challenge ID chỉ giữ trong bộ nhớ JavaScript; reload khi đang ở bước OTP sẽ yêu cầu login lại.
+- Password và OTP không được lưu vào Web Storage, cookie, URL hoặc console.
+- JWT chỉ được ghi vào `sessionStorage` sau verify OTP thành công; UI không hiển thị hoặc log token.
+- Frontend dùng `textContent` cho dữ liệu động và không chứa signing key, OTP hashing key, SMTP credential hoặc connection string.

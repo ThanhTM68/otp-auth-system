@@ -49,7 +49,8 @@ OTP:
 
 Email:
 
-- SMTP
+- MailKit
+- Gmail SMTP qua STARTTLS
 
 API documentation:
 
@@ -61,7 +62,7 @@ Testing:
 
 Frontend:
 
-- HTML/CSS/Bootstrap đơn giản hoặc frontend tối thiểu phục vụ demo.
+- HTML/CSS/JavaScript tĩnh phục vụ cùng ASP.NET Core application.
 
 ## Các chức năng chính
 

@@ -1,33 +1,33 @@
-# PHASE 0 - Thiết kế database
+# PHASE 14 - Thiết kế database thực tế
 
-## 1. Phạm vi và quy ước
+## 1. Tổng quan
 
-Database dùng SQL Server, truy cập qua Entity Framework Core. Schema ban đầu `Users`, `OtpChallenges`, `AuditLogs` được tạo ở Phase 2. Refactor split-flow bổ sung migration `SupportPendingOtpChallenge`; migration cũ được giữ nguyên.
+Hệ thống dùng **SQL Server** và **Entity Framework Core 8**. Model hiện tại có ba bảng:
 
-Quy ước chung:
+- `Users`
+- `OtpChallenges`
+- `AuditLogs`
 
-- Tên bảng dùng dạng số nhiều: `Users`, `OtpChallenges`, `AuditLogs`.
-- Primary key của User/challenge là UUID v4 (`uniqueidentifier`) do application sinh.
-- Tất cả thời điểm dùng UTC và lưu bằng `datetimeoffset(7)` để không làm tròn sai quyết định ở sát `ExpiresAt`.
-- Email dùng để tra cứu qua `NormalizedEmail`; server tạo giá trị chuẩn hóa thống nhất, ví dụ trim rồi `ToUpperInvariant()`.
-- OTP là chuỗi khi xử lý nhưng database chỉ lưu HMAC-SHA-256 dạng `varbinary(32)`.
-- Password chỉ được lưu dưới dạng format hash do ASP.NET Core `PasswordHasher` tạo.
-- Mọi thay đổi schema ở các phase sau phải đi qua EF Core Migration; không tự xóa database.
+Schema được quản lý bằng hai migration đang có trong repository:
 
-## 2. Sơ đồ quan hệ
+1. `20260822191004_InitialCreate`
+2. `20260830163003_SupportPendingOtpChallenge`
+
+Timestamps dùng `datetimeoffset(7)`. `User.Id`, `OtpChallenge.Id` và `AuthenticationFlowId` được application tạo bằng `Guid.NewGuid()`.
+
+## 2. ERD
 
 ```mermaid
 erDiagram
     USERS ||--o{ OTP_CHALLENGES : owns
     USERS o|--o{ AUDIT_LOGS : associated_with
-    OTP_CHALLENGES o|--o{ AUDIT_LOGS : referenced_by
 
     USERS {
         uniqueidentifier Id PK
-        nvarchar Email
-        nvarchar NormalizedEmail UK
-        nvarchar PasswordHash
-        nvarchar FullName
+        nvarchar_254 Email
+        nvarchar_254 NormalizedEmail UK
+        nvarchar_512 PasswordHash
+        nvarchar_100 FullName
         bit IsActive
         datetimeoffset CreatedAt
         rowversion RowVersion
@@ -37,8 +37,8 @@ erDiagram
         uniqueidentifier Id PK
         uniqueidentifier UserId FK
         uniqueidentifier AuthenticationFlowId
-        varbinary OtpHash "nullable"
-        varchar Purpose
+        varbinary_32 OtpHash "nullable"
+        varchar_32 Purpose
         datetimeoffset CreatedAt
         datetimeoffset ExpiresAt "nullable"
         datetimeoffset FlowExpiresAt
@@ -53,320 +53,219 @@ erDiagram
 
     AUDIT_LOGS {
         bigint Id PK
-        varchar EventType
-        datetimeoffset CreatedAt
-        uniqueidentifier UserId "nullable"
-        uniqueidentifier OtpChallengeId "nullable"
+        uniqueidentifier UserId FK "nullable"
+        uniqueidentifier OtpChallengeId "logical reference, nullable"
+        varchar_64 EventType
         bit Success
-        varchar ReasonCode "nullable"
-        varchar IpAddress "nullable"
-        nvarchar UserAgent "nullable"
-        varchar CorrelationId "nullable"
+        varchar_64 ReasonCode "nullable"
+        varchar_45 IpAddress "nullable"
+        nvarchar_256 UserAgent "nullable"
+        varchar_64 CorrelationId "nullable"
+        datetimeoffset CreatedAt
     }
 ```
 
+`AuditLogs.OtpChallengeId` chỉ là tham chiếu logic; model/migration không tạo foreign key tới `OtpChallenges`. Quan hệ vật lý chỉ gồm User–OtpChallenge và User–AuditLog.
+
 ## 3. Bảng `Users`
 
-### 3.1. Các cột
+| Cột | SQL Server type | Null | Default/đặc điểm |
+|---|---|---:|---|
+| `Id` | `uniqueidentifier` | Không | Primary key, application tạo |
+| `Email` | `nvarchar(254)` | Không | Email hiển thị đã trim |
+| `NormalizedEmail` | `nvarchar(254)` | Không | Trim + `ToUpperInvariant()` ở service |
+| `PasswordHash` | `nvarchar(512)` | Không | Format hash của `PasswordHasher<User>` |
+| `FullName` | `nvarchar(100)` | Không | Đã trim ở DTO |
+| `IsActive` | `bit` | Không | Default `1` |
+| `CreatedAt` | `datetimeoffset(7)` | Không | UTC do application đặt |
+| `RowVersion` | `rowversion` | Không | EF concurrency token |
 
-| Cột | SQL Server type | Null | Default | Mô tả/quy tắc |
-|---|---|---:|---|---|
-| `Id` | `uniqueidentifier` | Không | Không | Primary key, UUID v4 do application sinh. |
-| `Email` | `nvarchar(254)` | Không | Không | Email hiển thị đã trim; không dùng trực tiếp để so sánh unique. |
-| `NormalizedEmail` | `nvarchar(254)` | Không | Không | Giá trị chuẩn hóa để lookup/unique không phân biệt hoa thường. |
-| `PasswordHash` | `nvarchar(512)` | Không | Không | Format hash của `PasswordHasher`; không phải password plaintext. |
-| `FullName` | `nvarchar(100)` | Không | Không | Tên đã trim, từ 2 đến 100 ký tự. |
-| `IsActive` | `bit` | Không | `1` | Tài khoản có được phép bắt đầu/hoàn tất login hay không. |
-| `CreatedAt` | `datetimeoffset(7)` | Không | Không | Thời điểm tạo UTC, không thay đổi. |
-| `RowVersion` | `rowversion` | Không | SQL Server | EF Core concurrency token. |
+### Key và index
 
-`NormalizedEmail` là cột bổ sung ngoài danh sách tối thiểu để uniqueness không phụ thuộc hoàn toàn vào cách viết hoa/thường của input hoặc collation mặc định. `Email` vẫn được giữ để hiển thị.
-
-### 3.2. Key, index và constraint
-
-- `PK_Users` trên `Id`.
+- Primary key `PK_Users` trên `Id`.
 - Unique index `UX_Users_NormalizedEmail` trên `NormalizedEmail`.
-- Check constraint: `Email` và `NormalizedEmail` dài từ 3 đến 254 ký tự; `FullName` sau trim dài từ 2 đến 100 ký tự. Đây chỉ là hàng rào cuối; format/normalization vẫn được validate ở application.
-- Không có cột `Password` và không expose `PasswordHash` qua DTO/response.
-- Không hard-delete User trong phạm vi hiện tại; vô hiệu hóa bằng `IsActive = 0`.
 
-Unique index phải xử lý race của hai request đăng ký cùng email. Application lookup trước để trả lỗi thân thiện, nhưng database mới là nguồn quyết định cuối cùng.
+Source hiện tại **không có User CHECK constraint** cho độ dài/format email hoặc `FullName`. Các giới hạn này được thực thi bằng DTO validation; unique index là hàng rào database cho email trùng sau chuẩn hóa.
 
 ## 4. Bảng `OtpChallenges`
 
-### 4.1. Các cột
+| Cột | SQL Server type | Null | Default/ý nghĩa |
+|---|---|---:|---|
+| `Id` | `uniqueidentifier` | Không | Primary key và opaque `challengeId` |
+| `UserId` | `uniqueidentifier` | Không | FK tới `Users.Id` |
+| `AuthenticationFlowId` | `uniqueidentifier` | Không | Giữ nguyên qua first send/resend trong cùng flow |
+| `OtpHash` | `varbinary(32)` | Có | HMAC-SHA-256; null khi pending |
+| `Purpose` | `varchar(32)` | Không | Hiện chỉ cho phép `LOGIN` |
+| `CreatedAt` | `datetimeoffset(7)` | Không | Thời điểm tạo row |
+| `ExpiresAt` | `datetimeoffset(7)` | Có | Hạn OTP; null khi pending |
+| `FlowExpiresAt` | `datetimeoffset(7)` | Không | Hạn tuyệt đối của password flow |
+| `SentAt` | `datetimeoffset(7)` | Có | Chỉ set sau SMTP/finalize thành công |
+| `ConsumedAt` | `datetimeoffset(7)` | Có | Set sau verify đúng đã persist |
+| `AttemptCount` | `smallint` | Không | Số OTP đúng format nhưng không khớp |
+| `MaxAttempts` | `smallint` | Không | Default `5` |
+| `ResendCount` | `smallint` | Không | Bắt đầu `0`, tối đa `3` |
+| `IsRevoked` | `bit` | Không | Vô hiệu challenge |
+| `RowVersion` | `rowversion` | Không | EF concurrency token |
 
-| Cột | SQL Server type | Null | Default | Mô tả/quy tắc |
-|---|---|---:|---|---|
-| `Id` | `uniqueidentifier` | Không | Không | Primary key và `challengeId` opaque trả cho client. |
-| `UserId` | `uniqueidentifier` | Không | Không | FK tới `Users.Id`; không lấy từ client khi verify/resend. |
-| `AuthenticationFlowId` | `uniqueidentifier` | Không | Không | ID giữ nguyên qua challenge đầu và tối đa 3 challenge resend. |
-| `OtpHash` | `varbinary(32)` | Có | `NULL` | HMAC-SHA-256 khi OTP đã được chuẩn bị; pending challenge chưa có OTP để hash. |
-| `Purpose` | `varchar(32)` | Không | Không | Hiện tại chỉ có mã cố định `LOGIN`. |
-| `CreatedAt` | `datetimeoffset(7)` | Không | Không | Thời điểm tạo challenge/pre-auth flow theo UTC. |
-| `ExpiresAt` | `datetimeoffset(7)` | Có | `NULL` | Hạn OTP; null ở pending, được tính khi OTP được chuẩn bị. |
-| `FlowExpiresAt` | `datetimeoffset(7)` | Không | Không | Hạn tuyệt đối của password step, mặc định 10 phút từ challenge đầu. |
-| `SentAt` | `datetimeoffset(7)` | Có | `NULL` | Chỉ được set sau SMTP success; là mốc cooldown và bằng chứng OTP đã thực sự gửi. |
-| `ConsumedAt` | `datetimeoffset(7)` | Có | `NULL` | Được set đúng một lần khi verify thành công. |
-| `AttemptCount` | `smallint` | Không | `0` | Số lần OTP đúng format nhưng không khớp. |
-| `MaxAttempts` | `smallint` | Không | `5` | Tối đa 5 lần sai theo SR-13. |
-| `ResendCount` | `smallint` | Không | `0` | Số lần resend trong flow; giữ/tăng qua row mới, tối đa 3. |
-| `IsRevoked` | `bit` | Không | `0` | Vô hiệu do login/resend mới, đạt max attempts hoặc delivery failure. |
-| `RowVersion` | `rowversion` | Không | SQL Server | Chống lost update, double consume và race với resend. |
+### Foreign key và index
 
-Không cần lưu OTP plaintext hoặc cờ `IsExpired`:
-
-- Cooldown được tính từ `SentAt` của sent challenge hiện tại.
-- Expiration là trạng thái dẫn xuất từ `ExpiresAt`; pending chưa có expiration OTP.
-- `FlowExpiresAt` và `ResendCount` ngăn resend kéo dài password step vô hạn; resend copy flow ID/hạn cũ và tăng count.
-- Nguyên nhân revoke được ghi bằng audit `EventType`/`ReasonCode` thay vì thêm nhiều cờ trạng thái.
-
-### 4.2. HMAC của OTP
-
-Do OTP chỉ có một triệu khả năng, raw SHA-256 có thể bị thử hết offline nếu database lộ. Giá trị đề xuất:
-
-```text
-OtpHash = HMAC-SHA-256(
-    OtpHashingKey,
-    CanonicalEncode(AuthenticationFlowId, ChallengeId, UserId, Purpose, Otp)
-)
-```
-
-- `OtpHashingKey` là secret ngẫu nhiên riêng tối thiểu 256 bit, không dùng chung JWT signing key và không lưu trong database/source.
-- `CanonicalEncode` phải có định dạng không nhập nhằng, không ghép chuỗi tùy ý.
-- Khi verify, server tái tính HMAC và dùng fixed-time comparison.
-- Rotation key phải giữ khả năng verify challenge còn trong TTL hoặc revoke chúng có chủ đích.
-
-### 4.3. Key, index, foreign key và constraint
-
-- `PK_OtpChallenges` trên `Id`.
 - `FK_OtpChallenges_Users_UserId`: `UserId -> Users.Id`, delete behavior `NO ACTION`.
-- Index `IX_OtpChallenges_UserId_Purpose_CreatedAt` trên `(UserId, Purpose, CreatedAt DESC)` để tra cứu lịch sử.
-- Index `IX_OtpChallenges_AuthenticationFlowId_CreatedAt` trên `(AuthenticationFlowId, CreatedAt)` để audit một flow.
+- `IX_OtpChallenges_UserId_Purpose_CreatedAt` trên `(UserId, Purpose, CreatedAt DESC)`.
+- `IX_OtpChallenges_AuthenticationFlowId_CreatedAt` trên `(AuthenticationFlowId, CreatedAt)`.
 - Filtered unique index `UX_OtpChallenges_UserId_Purpose_Open` trên `(UserId, Purpose)` với filter:
 
 ```sql
-WHERE IsRevoked = 0 AND ConsumedAt IS NULL
+[IsRevoked] = 0 AND [ConsumedAt] IS NULL
 ```
 
-Filtered index không thể dùng đồng hồ hiện tại, vì vậy challenge đã hết hạn nhưng chưa revoke vẫn được coi là “open” đối với index. Login/resend phải revoke row open cũ trong cùng transaction trước khi insert row mới.
+Index này bảo đảm tối đa một row chưa revoke/chưa consume cho mỗi `(UserId, Purpose)`. SQL Server không thể dùng thời gian hiện tại trong filter, nên challenge đã expired nhưng chưa revoke vẫn được xem là open; login/resend phải revoke row đó trước khi insert row mới.
 
-Check constraint đã hiện thực trong model/migration:
+### CHECK constraints đã có thật
 
-```text
-Purpose IN ('LOGIN')
-ExpiresAt IS NULL OR (ExpiresAt > CreatedAt AND ExpiresAt <= FlowExpiresAt)
-(OtpHash IS NULL AND ExpiresAt IS NULL AND SentAt IS NULL)
-OR (OtpHash IS NOT NULL AND DATALENGTH(OtpHash) = 32 AND ExpiresAt IS NOT NULL
-    AND (SentAt IS NULL OR (SentAt >= CreatedAt AND SentAt < ExpiresAt)))
-AttemptCount >= 0 AND AttemptCount <= MaxAttempts
-MaxAttempts >= 1 AND MaxAttempts <= 5
-ResendCount >= 0 AND ResendCount <= 3
-ConsumedAt IS NULL OR (SentAt IS NOT NULL AND ConsumedAt >= SentAt AND ConsumedAt < ExpiresAt)
-```
+| Constraint | Điều kiện chính |
+|---|---|
+| `CK_OtpChallenges_Purpose` | `[Purpose] = 'LOGIN'` |
+| `CK_OtpChallenges_ExpiresAt` | `ExpiresAt` null, hoặc `CreatedAt < ExpiresAt <= FlowExpiresAt` |
+| `CK_OtpChallenges_Attempts` | `0 <= AttemptCount <= MaxAttempts` và `1 <= MaxAttempts <= 5` |
+| `CK_OtpChallenges_ResendCount` | `0 <= ResendCount <= 3` |
+| `CK_OtpChallenges_OtpState` | Pending có hash/expiry/sent đều null; prepared/sent có hash 32 byte và expiry; nếu có `SentAt` thì `CreatedAt <= SentAt < ExpiresAt` |
+| `CK_OtpChallenges_ConsumedState` | Nếu có `ConsumedAt` thì phải có `SentAt` và `SentAt <= ConsumedAt < ExpiresAt` |
 
-Giới hạn `MaxAttempts <= 5` bảo đảm cấu hình không vô tình yếu hơn SR-13. Các invariant `FlowExpiresAt <= CreatedAt + 10 phút`, đạt max-attempt thì phải revoke, và tổ hợp consumed/revoked hiện vẫn do service enforce; đây là phần defense-in-depth còn lại trong `SECURITY_REVIEW.md`. Khi cần thêm purpose phải dùng migration cập nhật constraint.
+Các constraint chưa mã hóa toàn bộ lifecycle. Ví dụ, database chưa bắt buộc `FlowExpiresAt = CreatedAt + 10 phút`, chưa bắt buộc `AttemptCount = MaxAttempts` đi cùng revoke và chưa cấm mọi tổ hợp vừa consumed vừa revoked. Những invariant này hiện do service kiểm tra.
 
-### 4.4. Trạng thái challenge
+## 5. Trạng thái `OtpChallenge`
 
-| Trạng thái logic | Điều kiện | Có thể verify? | Có thể resend? |
-|---|---|---:|---:|
-| Pending | `OtpHash`, `ExpiresAt`, `SentAt` đều null; password đã đúng nhưng chưa bấm gửi | Không | Không; chỉ first send |
-| Prepared | Có `OtpHash`/`ExpiresAt`, `SentAt` null trong khi delivery/finalize | Không | Không |
-| Usable, còn lượt resend | Chưa revoke/consume/khóa; `now < ExpiresAt`, `now < FlowExpiresAt`, `ResendCount < 3` | Có | Có sau cooldown/rate limit |
-| Usable, đã hết lượt resend | Chưa revoke/consume/khóa; `now < ExpiresAt`, `now < FlowExpiresAt`, `ResendCount = 3` | Có | Không |
-| OTP expired, còn lượt resend | Chưa revoke/consume/khóa; `now >= ExpiresAt`, `now < FlowExpiresAt`, `ResendCount < 3` | Không | Có sau cooldown/rate limit |
-| OTP expired, hết lượt resend | Chưa revoke/consume/khóa; `now >= ExpiresAt`, `now < FlowExpiresAt`, `ResendCount = 3` | Không | Không |
-| Flow expired | `now >= FlowExpiresAt` | Không | Không; phải login password lại |
-| Locked/revoked | `IsRevoked = 1`, gồm đạt 5 lần sai | Không | Không; phải login password lại |
-| Consumed | `ConsumedAt != NULL` | Không | Không |
+| Trạng thái | `OtpHash` | `ExpiresAt` | `SentAt` | Terminal fields | Hành vi |
+|---|---:|---:|---:|---|---|
+| Pending | null | null | null | chưa consume/revoke | Chỉ được first send |
+| Prepared | có | có | null | chưa consume/revoke | Đang chờ SMTP/finalize; không verify/resend |
+| Sent | có | có | có | chưa consume/revoke | Verify được nếu còn hạn/lượt; resend sau cooldown |
+| Consumed | có | có | có | `ConsumedAt != null` | Không verify lại hoặc resend |
+| Revoked/locked | có thể có/null | có thể có/null | có thể có/null | `IsRevoked = 1` | Không verify hoặc resend |
 
-Khi nhiều điều kiện cùng đúng, trạng thái terminal `Consumed/Revoked` và `Flow expired` được ưu tiên. `ResendCount = 3` không tự revoke và không làm OTP hiện tại mất hiệu lực; nó chỉ cấm tạo lần resend thứ 4.
+Các giá trị mặc định được validation startup khóa theo implementation:
 
-Các chuyển trạng thái hợp lệ:
+- OTP: 6 chữ số.
+- OTP TTL: 3 phút, cắt tại `FlowExpiresAt` nếu cần.
+- Flow TTL: 10 phút.
+- Max attempts: 5.
+- Resend cooldown: 60 giây từ `SentAt`.
+- Max resends: 3.
 
-```text
-Pending -> Prepared                      (first send bắt đầu)
-Prepared -> Sent                         (SMTP và finalize thành công)
-Pending/Prepared/Sent -> Revoked         (login mới/delivery failure)
-Sent -> Consumed                         (OTP đúng)
-Sent -> Revoked at AttemptCount = 5      (quá nhiều OTP sai)
-Sent -> OTP Expired -> Revoked           (resend trong flow hoặc cleanup)
-Flow Expired -> Revoked                  (login mới hoặc cleanup)
-```
+Resend tạo **row mới**, giữ flow ID/hạn flow, tăng `ResendCount` và revoke row cũ. OTP cũ vì vậy không còn usable.
 
-Không có chuyển từ Consumed/Revoked về Open. Resend luôn tạo row mới.
+## 6. Bảng `AuditLogs`
 
-## 5. Bảng `AuditLogs`
-
-### 5.1. Mục tiêu
-
-AuditLog là nhật ký bảo mật dạng append-only, phục vụ điều tra và chứng minh các control. Bảng tuyệt đối không chứa password, password hash, OTP, OTP hash, JWT, Authorization header, secret, raw request/response body hoặc raw exception.
-
-### 5.2. Các cột
-
-| Cột | SQL Server type | Null | Mô tả/quy tắc |
+| Cột | SQL Server type | Null | Ý nghĩa |
 |---|---|---:|---|
-| `Id` | `bigint IDENTITY` | Không | Primary key tăng dần. |
-| `EventType` | `varchar(64)` | Không | Mã sự kiện từ allowlist. |
-| `CreatedAt` | `datetimeoffset(7)` | Không | Thời điểm UTC phía server. |
-| `UserId` | `uniqueidentifier` | Có | User liên quan; null nếu login bằng email không tồn tại. |
-| `OtpChallengeId` | `uniqueidentifier` | Có | ID tham chiếu thông tin bất biến; không tạo physical FK để purge challenge không sửa audit. |
-| `Success` | `bit` | Không | Kết quả thành công/thất bại của event. |
-| `ReasonCode` | `varchar(64)` | Có | Mã lý do nội bộ từ allowlist; không chứa input/exception tự do. |
-| `IpAddress` | `varchar(45)` | Có | IPv4/IPv6 sau xử lý trusted proxy; là dữ liệu cá nhân. |
-| `UserAgent` | `nvarchar(256)` | Có | User-Agent được giới hạn độ dài; phải sanitize trước khi ghi/hiển thị. |
-| `CorrelationId` | `varchar(64)` | Có | ID do server tạo/validate nghiêm ngặt để liên kết với application log đã sanitize. |
+| `Id` | `bigint IDENTITY(1,1)` | Không | Primary key |
+| `UserId` | `uniqueidentifier` | Có | FK tới User khi xác định được |
+| `OtpChallengeId` | `uniqueidentifier` | Có | Tham chiếu logic, không có physical FK |
+| `EventType` | `varchar(64)` | Không | Event từ allowlist |
+| `Success` | `bit` | Không | Kết quả event |
+| `ReasonCode` | `varchar(64)` | Có | Reason từ allowlist |
+| `IpAddress` | `varchar(45)` | Có | IP do server quan sát |
+| `UserAgent` | `nvarchar(256)` | Có | Bị cắt tối đa 256 ký tự |
+| `CorrelationId` | `varchar(64)` | Có | `TraceIdentifier`, bị cắt độ dài |
+| `CreatedAt` | `datetimeoffset(7)` | Không | UTC từ `TimeProvider` |
 
-Không thêm cột `Details`, `Message` hoặc JSON tự do ở thiết kế ban đầu vì chúng dễ trở thành đường rò rỉ dữ liệu bí mật. Nếu phase sau thực sự cần metadata, phải dùng allowlist key/value và security review riêng.
+### Key, relationship và index
 
-### 5.3. Key, index và foreign key
+- Primary key `PK_AuditLogs` trên `Id`.
+- Nullable FK `FK_AuditLogs_Users_UserId`, delete behavior `NO ACTION`.
+- `IX_AuditLogs_CreatedAt` trên `CreatedAt DESC`.
+- `IX_AuditLogs_UserId_CreatedAt` trên `(UserId, CreatedAt DESC)`.
+- `IX_AuditLogs_EventType_CreatedAt` trên `(EventType, CreatedAt DESC)`.
+- Không có index trên `OtpChallengeId` trong model hiện tại.
 
-- `PK_AuditLogs` trên `Id`.
-- `FK_AuditLogs_Users_UserId` nullable, delete behavior `NO ACTION` vì không hard-delete User trong phạm vi.
-- `OtpChallengeId` là logical/informational reference, không có physical FK. Nhờ vậy việc purge challenge không update hoặc xóa AuditLog append-only.
-- Index `IX_AuditLogs_CreatedAt` trên `CreatedAt DESC`.
-- Index `IX_AuditLogs_UserId_CreatedAt` trên `(UserId, CreatedAt DESC)`.
-- Index `IX_AuditLogs_EventType_CreatedAt` trên `(EventType, CreatedAt DESC)`.
-- Có thể thêm index theo `OtpChallengeId` nếu truy vấn điều tra cần; tránh index quá mức trong bài demo.
+Audit log được application sử dụng theo hướng append-only, nhưng database chưa có cơ chế kỹ thuật cấm `UPDATE`/`DELETE`. Schema không có cột password, OTP plaintext, OTP hash, JWT, Authorization header, request body hoặc exception tự do.
 
-### 5.4. Event bắt buộc
+## 7. Event và reason code
 
-| EventType | Success thường dùng | Khi ghi |
-|---|---|---|
-| `REGISTER_SUCCESS` | `true` | User được tạo thành công. |
-| `LOGIN_PASSWORD_SUCCESS` | `true` | Email/password đúng, trước bước OTP. |
-| `LOGIN_PASSWORD_FAILED` | `false` | Email/password sai hoặc tài khoản inactive; response client vẫn giống nhau. |
-| `OTP_SEND_REQUESTED` | `true` | First-send hợp lệ bắt đầu; không ghi OTP/email đầy đủ. |
-| `OTP_CREATED` | `true` | OTP HMAC/expiration đã được persist; không ghi OTP. |
-| `OTP_SENT` | `true` | SMTP thành công và `SentAt` đã được commit. |
-| `OTP_VERIFY_FAILED` | `false` | OTP không khớp hoặc challenge bị replay/revoke/lock/not found; expired dùng event riêng. |
-| `OTP_EXPIRED` | `false` | Verify challenge tại/sau `ExpiresAt`. |
-| `OTP_VERIFY_SUCCESS` | `true` | `ConsumedAt` được commit thành công. |
-| `OTP_RESEND_SUCCESS` | `true` | Challenge mới đã gửi email thành công. |
-
-Policy hiện thực: lần sai thứ 5 ghi thêm `OTP_MAX_ATTEMPTS_REACHED`; SMTP failure ghi `OTP_DELIVERY_FAILED`; JWT được cấp ghi `JWT_ISSUED`; OTP đã consume ghi `OTP_REPLAY_REJECTED`; resend không thành công ghi `OTP_RESEND_FAILED` với reason code allowlist. `OTP_EXPIRED` được ghi một lần cho lần verify expired và không ghi thêm `OTP_VERIFY_FAILED` cho cùng request. Event/reason code là hằng số nội bộ, không lấy trực tiếp từ dữ liệu client.
-
-Khi client gửi một challenge ID không tồn tại, audit dùng `ReasonCode = CHALLENGE_NOT_FOUND` nhưng để `OtpChallengeId = NULL`; không sao chép identifier tùy ý từ request vào AuditLog.
-
-## 6. Transaction và tính nhất quán
-
-### 6.1. Register
-
-Transaction chứa insert User và `REGISTER_SUCCESS`. Unique index xử lý hai register đồng thời. Không ghi audit success nếu transaction User không commit.
-
-### 6.2. Login password đúng / tạo pending challenge
-
-Trong transaction ngắn với isolation phù hợp:
-
-1. Revoke mọi open `LOGIN` challenge của User.
-2. Insert pending challenge mới với `OtpHash`, `ExpiresAt`, `SentAt` đều null.
-3. Insert `LOGIN_PASSWORD_SUCCESS`.
-4. Commit và trả response; không gọi SMTP/JWT.
-
-### 6.3. Gửi OTP lần đầu
-
-Chỉ pending challenge hợp lệ được chuyển sang prepared. Server sinh OTP/HMAC và expiration, persist prepared state cùng `OTP_SEND_REQUESTED`/`OTP_CREATED`, gọi SMTP ngoài transaction, rồi chỉ sau success mới set `SentAt` và ghi `OTP_SENT`. Nếu SMTP hoặc finalize thất bại, operation fail closed/revoke và ghi `OTP_DELIVERY_FAILED`; client không nhận success giả. Gọi first-send lần hai không được chuyển thành resend.
-
-### 6.4. Verify OTP sai
-
-- Tăng `AttemptCount`, set revoke khi đạt max và ghi audit trong một transaction ngắn có `RowVersion` optimistic concurrency.
-- Mỗi request OTP sai hợp lệ phải được tính đúng một lần; không được lost update.
-- Khi tăng từ 4 lên 5, đồng thời đặt `IsRevoked = 1` và ghi audit.
-- Khi gặp concurrency conflict, rollback, reload và đánh giá lại toàn bộ state với cùng request; tiếp tục tới khi update commit, challenge đã terminal hoặc request bị hủy. Không tự coi là thành công và không để lost update.
-
-### 6.5. Verify OTP đúng
-
-Conditional update chỉ được thành công nếu challenge vẫn chưa consumed/revoked, attempts dưới max, chưa hết hạn, đúng purpose và User active. `ConsumedAt` cùng `OTP_VERIFY_SUCCESS` được commit trong một transaction. JWT chỉ được tạo/trả sau commit; concurrency loser không được cấp token.
-
-### 6.6. Resend
-
-Trong transaction ngắn:
-
-1. Xác nhận request trỏ tới open challenge hiện tại và trạng thái cho phép resend.
-2. Yêu cầu challenge đã sent và kiểm tra cooldown/rate-limit từ `SentAt`.
-3. Revoke challenge cũ.
-4. Insert prepared replacement với OTP HMAC hoàn toàn mới; copy `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, và cắt `ExpiresAt` tại flow expiry.
-5. Commit prepared replacement/`OTP_CREATED` rồi gửi SMTP; sau delivery thành công set `SentAt` và ghi `OTP_SENT`/`OTP_RESEND_SUCCESS`.
-6. Nếu delivery/finalize fail, ghi `OTP_RESEND_FAILED`/`OTP_DELIVERY_FAILED` và fail closed; challenge cũ vẫn bị revoke để OTP cũ không hồi sinh.
-
-`Serializable` cho đoạn revoke/insert ngắn, `RowVersion` và filtered unique index tạo ba lớp bảo vệ dễ giải thích cho bản demo. Unique/concurrency exception phải được ánh xạ sang lỗi an toàn, không trả SQL detail.
-
-## 7. Truy vấn và invariant quan trọng
-
-- Lookup User chỉ qua `NormalizedEmail` có unique index.
-- Lookup verify/resend qua `OtpChallenges.Id`; không query bằng OTP hash. “Current/latest” được xác định trước hết bởi open row duy nhất, không chỉ dựa vào timestamp; lịch sử dùng `(CreatedAt, Id)` làm tie-breaker.
-- Challenge usable khi và chỉ khi:
+Event types đang tồn tại trong source:
 
 ```text
-Purpose == LOGIN
-AND IsRevoked == false
-AND ConsumedAt == null
-AND AttemptCount < MaxAttempts
-AND OtpHash != null
-AND SentAt != null
-AND ExpiresAt != null
-AND now < ExpiresAt
-AND now < FlowExpiresAt
-AND User.IsActive == true
+REGISTER_SUCCESS
+LOGIN_PASSWORD_SUCCESS
+LOGIN_PASSWORD_FAILED
+OTP_SEND_REQUESTED
+OTP_CREATED
+OTP_SENT
+OTP_DELIVERY_FAILED
+OTP_VERIFY_FAILED
+OTP_EXPIRED
+OTP_REPLAY_REJECTED
+OTP_MAX_ATTEMPTS_REACHED
+OTP_VERIFY_SUCCESS
+OTP_RESEND_SUCCESS
+OTP_RESEND_FAILED
+JWT_ISSUED
 ```
 
-- `challengeId` là identifier khó đoán, không phải secret thay thế OTP.
-- Địa chỉ email nhận OTP luôn lấy qua quan hệ `OtpChallenge.User.Email`; `/send-otp` và `/resend-otp` không nhận email quyết định người nhận.
-- Không dựa vào thứ tự `Id` để xác định mới nhất; dùng `CreatedAt` và điều kiện open.
+Reason codes đang tồn tại:
 
-## 8. Bảo vệ dữ liệu
+```text
+INVALID_CREDENTIALS
+CHALLENGE_NOT_FOUND
+USER_INACTIVE
+WRONG_PURPOSE
+CHALLENGE_REVOKED
+CHALLENGE_LOCKED
+OTP_EXPIRED
+FLOW_EXPIRED
+OTP_MISMATCH
+OTP_NOT_SENT
+DELIVERY_FAILED
+RESEND_COOLDOWN
+RESEND_LIMIT_REACHED
+RESEND_NOT_AVAILABLE
+```
 
-| Dữ liệu | Có lưu? | Bảo vệ |
+`RESEND_LIMIT_REACHED` hiện được khai báo nhưng luồng resend đang dùng `RESEND_NOT_AVAILABLE` cho trường hợp không còn lượt.
+
+## 8. Transaction và concurrency theo source
+
+- **Register:** User và `REGISTER_SUCCESS` được lưu trong cùng `SaveChangesAsync`; unique index xử lý race email trùng.
+- **Login đúng:** relational provider mở transaction bằng `BeginTransactionAsync`, revoke open challenges và persist trước, sau đó insert pending challenge cùng audit rồi commit.
+- **First send:** persist prepared state/audit trước SMTP; sau SMTP success reload row, set `SentAt` và persist `OTP_SENT`. Không giữ transaction qua network.
+- **Verify sai/đúng:** mutation challenge và audit tương ứng nằm trong cùng `SaveChangesAsync`. `RowVersion` phát hiện conflict; loop verify reload tối đa 6 lần.
+- **Resend:** transaction ngắn revoke row cũ rồi insert prepared row mới; SMTP chạy sau commit. Finalize hoặc compensation là các lần persist riêng.
+
+Code không chỉ định isolation level `Serializable`; transaction dùng isolation mặc định của SQL Server provider. Verify không dùng câu SQL conditional tự viết; các điều kiện được service kiểm tra lại và update được bảo vệ bằng `RowVersion` trong lệnh EF Core.
+
+## 9. Migration history
+
+### `InitialCreate`
+
+- Tạo `Users`, `OtpChallenges`, `AuditLogs`.
+- Tạo PK/FK/index, rowversion và các constraint OTP ban đầu.
+- Ở schema ban đầu, `OtpHash` và `ExpiresAt` là non-null.
+
+### `SupportPendingOtpChallenge`
+
+- Chuyển `OtpHash` và `ExpiresAt` thành nullable.
+- Thêm nullable `SentAt`.
+- Backfill row cũ có OTP bằng `SentAt = CreatedAt`.
+- Thêm `CK_OtpChallenges_OtpState` và `CK_OtpChallenges_ConsumedState`; cập nhật constraint expiry.
+- `Down` revoke/fill pending rows trước khi khôi phục schema non-null cũ.
+
+Migration files mô tả schema mong muốn của source. Việc một database môi trường cụ thể đã apply tới migration nào cần được xác nhận bằng EF CLI/database, không suy ra chỉ từ file tài liệu.
+
+## 10. Dữ liệu nhạy cảm
+
+| Dữ liệu | Lưu trong database? | Cách xử lý |
 |---|---:|---|
-| Password plaintext | Không | Chỉ tồn tại trong request/memory ngắn; không log; HTTPS. |
-| Password hash | Có, `Users.PasswordHash` | Quyền DB tối thiểu; không trả qua API/log. |
-| OTP plaintext | Không | Chỉ tồn tại tạm để HMAC và gửi SMTP; không log/audit. |
-| OTP HMAC | Có, `OtpChallenges.OtpHash` | Key tách khỏi DB/source; không expose. |
-| JWT | Không lưu trong thiết kế hiện tại | Chỉ trả qua HTTPS; không log; TTL 15 phút. |
-| SMTP/JWT/DB/HMAC secrets | Không lưu trong bảng/source | Configuration an toàn, User Secrets/environment/secret store. |
-| IP | Có thể lưu trong AuditLogs | Parse thành địa chỉ IP hợp lệ, phân quyền và retention vì là dữ liệu cá nhân. |
+| Password plaintext | Không | Chỉ `PasswordHash` của framework được lưu |
+| OTP plaintext | Không | Chỉ tồn tại tạm trong memory để hash/gửi email |
+| OTP HMAC | Có | `OtpHash varbinary(32)`, key nằm ngoài database/source |
+| JWT | Không | Trả cho client sau verify; không persist |
+| Application secrets | Không | User Secrets/environment/configuration provider |
+| IP/User-Agent | Có thể | Chỉ trong audit, có giới hạn độ dài |
 
-SQL Server backup và connection cũng cần encryption/quyền truy cập phù hợp trong môi trường thật. Điều này là trách nhiệm vận hành, không thay thế application controls.
+## 11. Giới hạn và vận hành
 
-## 9. Dọn dữ liệu và retention
-
-- Phase 0 không tạo cleanup job và không xóa dữ liệu.
-- Challenge expired/revoked/consumed có thể được giữ ngắn hạn để test/audit rồi purge bằng một chính sách được phê duyệt ở phase sau.
-- Khi purge `OtpChallenges`, `AuditLogs.OtpChallengeId` vẫn giữ giá trị informational vì không có physical FK; AuditLog không bị update.
-- AuditLogs nên có retention dài hơn challenge nhưng phải cân bằng yêu cầu môn học, dung lượng và dữ liệu cá nhân.
-- Không hard-delete User trong phạm vi; `IsActive` phục vụ vô hiệu hóa.
-
-## 10. Đối chiếu yêu cầu bảo mật
-
-- SR-01..03: `Users` chỉ có `PasswordHash`, không có password/log plaintext.
-- SR-04..07: OTP 6 số do CSPRNG; chỉ HMAC được lưu; schema audit không có OTP.
-- SR-08..12: `SentAt`, `ExpiresAt`, `ConsumedAt`, `RowVersion` và conditional transaction bảo đảm chỉ mã đã gửi mới verify, expiration/single-use/replay protection.
-- SR-13..14: `AttemptCount`, `MaxAttempts <= 5`, revoke khi đạt 5.
-- SR-15..17: resend tạo row mới, revoke row cũ, `SentAt` làm mốc cooldown 60 giây; flow expiry/resend count là lớp bổ sung chống kéo dài vô hạn.
-- SR-18: index hỗ trợ partition/check nhanh; rate limiter nằm ở application.
-- SR-19..21: database không cấp token; `ConsumedAt` commit là điều kiện cho JwtTokenService.
-- SR-22..23: `AuditLogs` hỗ trợ đủ event và không có cột secret/raw payload.
-- SR-24..26: constraints là lớp cuối; application vẫn validate và sanitize error.
-- SR-27: không có bảng/cột lưu application secrets.
-
-## 11. Quyết định thiết kế quan trọng
-
-- Bổ sung `NormalizedEmail` và unique index để bảo vệ uniqueness đúng khi concurrent.
-- Bổ sung `RowVersion` cho User/challenge để xử lý optimistic concurrency.
-- Bổ sung `AuthenticationFlowId`, `FlowExpiresAt` 10 phút và `ResendCount` tối đa 3 cho resend an toàn.
-- Dùng `varbinary(32)` HMAC-SHA-256 có key riêng cho OTP.
-- Migration `SupportPendingOtpChallenge` làm `OtpHash`/`ExpiresAt` nullable, thêm `SentAt`, backfill row OTP cũ bằng `SentAt = CreatedAt` và cập nhật state constraints; migration cũ không bị sửa.
-- Chỉ một open challenge trên mỗi `(UserId, Purpose)`.
-- Expired là trạng thái dẫn xuất; khi tạo mới phải revoke open row cũ.
-- Resend tạo row mới thay vì tái sử dụng/cập nhật OTP hash của row cũ, giúp audit và chống mã cũ rõ ràng.
-- Audit dùng field cấu trúc và allowlist, không có trường text/JSON tự do.
-- Transaction không bao quanh SMTP; delivery failure dùng compensation best-effort và bị giới hạn bởi TTL/flow expiry nếu compensation không chạy được.
-
-## 12. Vấn đề còn cần xử lý
-
-- Chốt retention cụ thể cho challenge/audit và quyền thực hiện purge mà không sửa AuditLog.
-- Chốt cách rotation `OtpHashingKey` trong cửa sổ challenge còn TTL.
-- Kiểm tra filtered index, constraints và isolation thật bằng integration test SQL Server ở Phase 2/11.
-- Chốt database encryption, backup và least-privilege account cho môi trường triển khai.
-- Tất cả entity/configuration/migration chỉ được tạo khi người dùng yêu cầu đúng phase tiếp theo.
+- Chưa có cleanup/retention job cho challenge và audit log.
+- Chưa có database constraint cho toàn bộ lifecycle invariant.
+- `AuditLogs.OtpChallengeId` không có FK/index; đây là chủ đích để giữ audit độc lập, nhưng truy vấn theo challenge chưa được tối ưu.
+- Không hard-delete User trong luồng ứng dụng hiện tại; trạng thái hoạt động dùng `IsActive`.
+- Backup encryption, least-privilege database account, retention và key rotation phải được cấu hình ở môi trường triển khai.

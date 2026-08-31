@@ -22,7 +22,7 @@ Không thực hiện thay đổi kiến trúc lớn, không đổi SQL Server/En
 - Kiểm tra log, audit event, exception response, cache policy, HTTPS, CORS, security headers và rate-limit partition.
 - Kiểm tra frontend bằng static analysis cho Web Storage, DOM sink, raw error rendering, CSP, form fallback và authentication state.
 - Chạy dependency vulnerability review, regression test tự động và test concurrency SQL Server dạng opt-in khi môi trường phù hợp.
-- Security review gốc đã có lần chạy 80/80. Sau split-flow refactor, full suite bật SQL opt-in đạt **105/105 pass, 0 failed, 0 skipped**, gồm đủ bốn test concurrency trên SQL Server thật.
+- Security review gốc đã có lần chạy 80/80. Lượt verify PHASE 14 ngày 2026-08-31 đạt **101 pass, 4 SQL opt-in skip** với command chuẩn và **105/105 pass, 0 failed, 0 skipped** khi bật SQL opt-in, gồm đủ bốn test concurrency trên SQL Server thật.
 
 ## Findings Summary
 

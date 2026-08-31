@@ -165,7 +165,11 @@ Ghi nhận các security event quan trọng:
 - OTP_VERIFY_FAILED
 - OTP_EXPIRED
 - OTP_VERIFY_SUCCESS
-- OTP_RESEND
+- OTP_REPLAY_REJECTED
+- OTP_MAX_ATTEMPTS_REACHED
+- OTP_RESEND_SUCCESS
+- OTP_RESEND_FAILED
+- JWT_ISSUED
 
 SR-23:
 Audit log tuyệt đối không chứa OTP plaintext hoặc password.

@@ -86,7 +86,7 @@
 - [x] SMTP Configuration
 - [x] Email template
 - [x] Không log OTP
-- [x] Login email integration
+- [x] Send OTP email integration
 - [x] Development safe mode nếu cần
 
 ---
@@ -120,6 +120,7 @@
 ## PHASE 9 - Rate Limiting
 
 - [x] Login rate limit
+- [x] Send OTP rate limit
 - [x] OTP verify rate limit
 - [x] OTP resend rate limit
 
@@ -174,15 +175,15 @@
 
 ## PHASE 14 - Documentation
 
-- [ ] README
-- [ ] Setup guide
-- [ ] API documentation
-- [ ] Database diagram
-- [ ] Authentication sequence
-- [ ] OTP sequence
-- [ ] Security analysis
-- [ ] Attack scenarios
-- [ ] Testing report
+- [x] README
+- [x] Setup guide
+- [x] API documentation
+- [x] Database diagram
+- [x] Authentication sequence
+- [x] OTP sequence
+- [x] Security analysis
+- [x] Attack scenarios
+- [x] Testing report
 
 ---
 

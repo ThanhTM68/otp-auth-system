@@ -1,77 +1,49 @@
-# PHASE 0 - Đặc tả API
+# API Specification
 
-## 1. Phạm vi
+## 1. Tổng quan
 
-Tài liệu định nghĩa contract hiện tại cho ASP.NET Core Web API của hệ thống xác thực OTP, bao gồm split-flow login/pending/first-send và UI cùng origin. Quota theo User/email trong các phần thiết kế bên dưới là contract mục tiêu, không phải xác nhận đã được hiện thực.
+Base route: `/api/auth`
 
-Các endpoint:
+| Method | Endpoint | Authentication | Mục đích |
+|---|---|---|---|
+| `POST` | `/register` | Anonymous | Đăng ký User. |
+| `POST` | `/login` | Anonymous | Xác minh password và tạo pending challenge. |
+| `POST` | `/send-otp` | Anonymous | Sinh/gửi OTP lần đầu cho pending challenge. |
+| `POST` | `/verify-otp` | Anonymous | Verify OTP, consume challenge và cấp JWT. |
+| `POST` | `/resend-otp` | Anonymous | Revoke challenge cũ và gửi OTP/challenge mới. |
+| `GET` | `/me` | Bearer JWT | Trả hồ sơ tối thiểu của User đang active. |
 
-| Method | Path | Anonymous | Mục đích |
-|---|---|---:|---|
-| `POST` | `/api/auth/register` | Có | Đăng ký tài khoản. |
-| `POST` | `/api/auth/login` | Có | Kiểm tra password và tạo pending challenge; không gửi OTP. |
-| `POST` | `/api/auth/send-otp` | Có | Sinh và gửi OTP lần đầu cho pending challenge. |
-| `POST` | `/api/auth/verify-otp` | Có | Xác minh OTP và cấp JWT. |
-| `POST` | `/api/auth/resend-otp` | Có | Vô hiệu mã cũ, tạo và gửi mã mới. |
-| `GET` | `/api/auth/me` | Không | API protected để kiểm chứng JWT. |
+Tên JSON property dùng `camelCase`. Timestamp là ISO 8601 UTC. OTP luôn là string 6 chữ số. Mọi auth response có `Cache-Control: no-store`; mọi auth POST body bị giới hạn 16 KiB.
 
-## 2. Quy ước chung
+## 2. Error response
 
-- Chỉ phục vụ qua HTTPS ngoài local development.
-- Request và success response dùng `application/json; charset=utf-8`; error response dùng `application/problem+json`.
-- Tên property JSON dùng `camelCase`.
-- Thời điểm trả theo ISO 8601 UTC, ví dụ `2026-08-22T13:00:00Z`.
-- `challengeId` và `id` là UUID string.
-- OTP là string đúng 6 chữ số, không phải number, để giữ chữ số `0` ở đầu.
-- Mọi response của sáu endpoint trong tài liệu, kể cả `/me` và lỗi, có `Cache-Control: no-store` và không được log body/Authorization header nhạy cảm.
-- Client không được gửi `UserId`, `Purpose`, `AuthenticationFlowId`, `FlowExpiresAt`, `ResendCount`, TTL, attempts hoặc trạng thái challenge.
-- Mọi response lỗi có `traceId`, nhưng không có stack trace, SQL/SMTP detail, tên class hoặc secret.
-- `429 Too Many Requests` trả `Retry-After` khi server xác định được thời gian chờ.
-- Mọi auth POST body tối đa 16 KiB; body vượt giới hạn trả `413 REQUEST_TOO_LARGE` trước model binding/service.
-
-## 3. Error format
-
-API dùng Problem Details với extension `code` và `traceId`:
+Lỗi nghiệp vụ dùng Problem Details với `code` và `traceId`:
 
 ```json
 {
-  "type": "about:blank",
-  "title": "Thông tin đăng nhập không hợp lệ.",
+  "title": "Email hoặc mật khẩu không chính xác.",
   "status": 401,
   "code": "INVALID_CREDENTIALS",
-  "traceId": "00-example-trace-id"
+  "traceId": "<server-trace-id>"
 }
 ```
 
-Chỉ lỗi validation có danh sách field:
+Lỗi validation có thêm `errors` theo field. Response không chứa stack trace, SQL/SMTP detail, password, OTP, OTP HMAC, JWT key hoặc credential.
 
-```json
-{
-  "type": "about:blank",
-  "title": "Dữ liệu gửi lên không hợp lệ.",
-  "status": 400,
-  "code": "VALIDATION_ERROR",
-  "traceId": "00-example-trace-id",
-  "errors": {
-    "email": ["Email không đúng định dạng."]
-  }
-}
-```
+Các auth POST có thể trả:
 
-Login không phân biệt email không tồn tại, password sai và tài khoản inactive. Các lỗi OTP dùng code an toàn theo trạng thái của challenge identifier khó đoán (`OTP_NOT_SENT`, `OTP_EXPIRED`, `OTP_NOT_CURRENT`, `OTP_MAX_ATTEMPTS` hoặc lỗi mã chung), không trả email đầy đủ, OTP/hash hay chi tiết nội bộ.
+- `400 VALIDATION_ERROR` khi DTO không hợp lệ.
+- `413 REQUEST_TOO_LARGE` khi body vượt 16 KiB.
+- `429 RATE_LIMITED` khi vượt policy endpoint; header `Retry-After` được trả khi limiter có metadata.
+- `500 INTERNAL_ERROR` cho lỗi không dự đoán đã sanitize. Global exception boundary cũng áp dụng lỗi `500` cho `/me`.
 
-## 4. `POST /api/auth/register`
+## 3. `POST /api/auth/register`
 
-### Mục đích
+**Authentication:** Không yêu cầu.
 
-Tạo User mới với password đã hash. Endpoint không tạo OTP, không đăng nhập tự động và không cấp JWT.
+Tạo User mới. Password được hash trước khi lưu; endpoint không tạo OTP hoặc JWT.
 
 ### Request
-
-```http
-POST /api/auth/register
-Content-Type: application/json
-```
 
 ```json
 {
@@ -81,22 +53,13 @@ Content-Type: application/json
 }
 ```
 
-| Field | Kiểu | Bắt buộc | Validation |
-|---|---|---:|---|
-| `email` | string | Có | Trim, format email hợp lệ, tối đa 254 ký tự; unique sau normalize. |
-| `password` | string | Có | 8-128 ký tự; không trim/normalize; không log. |
-| `fullName` | string | Có | Trim, 2-100 ký tự. |
+| Field | Validation |
+|---|---|
+| `email` | Required, email hợp lệ, tối đa 254 ký tự; được trim. |
+| `password` | Required, 8-128 ký tự, không chỉ có khoảng trắng. |
+| `fullName` | Required, 2-100 ký tự; được trim. |
 
-Các field do server quản lý như `id`, `passwordHash`, `isActive`, `createdAt` bị bỏ qua hoặc từ chối theo DTO allowlist; không được model-bind vào entity trực tiếp.
-
-### Xử lý
-
-1. Validate DTO và rate limit theo IP.
-2. Chuẩn hóa email và kiểm tra unique.
-3. Hash password bằng `PasswordHasher`.
-4. Tạo User active và audit `REGISTER_SUCCESS` trong một transaction.
-
-### Response thành công - `201 Created`
+### Success — `201 Created`
 
 ```json
 {
@@ -104,35 +67,25 @@ Các field do server quản lý như `id`, `passwordHash`, `isActive`, `createdA
   "email": "student@example.com",
   "fullName": "Nguyen Van A",
   "isActive": true,
-  "createdAt": "2026-08-22T13:00:00Z"
+  "createdAt": "2026-08-31T10:00:00Z"
 }
 ```
 
-Response không bao giờ có password, `passwordHash`, OTP hoặc token.
+### Lỗi riêng
 
-### Lỗi
-
-| Status | Code | Điều kiện |
+| Status | Code | Khi nào |
 |---:|---|---|
-| `400` | `VALIDATION_ERROR` | Request sai format/range. |
-| `409` | `EMAIL_ALREADY_REGISTERED` | Normalized email đã tồn tại, kể cả race tại unique index. |
-| `429` | `RATE_LIMITED` | Vượt quota register theo IP. |
-| `500` | `INTERNAL_ERROR` | Lỗi không dự đoán; response đã sanitize. |
+| `409` | `EMAIL_ALREADY_REGISTERED` | Normalized email đã tồn tại. |
 
-Việc trả `409` giúp demo/UX rõ nhưng có thể hỗ trợ account enumeration. Thiết kế chấp nhận trade-off này trong phạm vi, đồng thời rate limit register; có thể đổi sang response chung nếu yêu cầu bảo mật triển khai cao hơn.
+Rate limit: 5 request/3600 giây/IP.
 
-## 5. `POST /api/auth/login`
+## 4. `POST /api/auth/login`
 
-### Mục đích
+**Authentication:** Không yêu cầu.
 
-Xác minh email/password và tạo pending challenge. Endpoint không sinh OTP, không gọi SMTP và không cấp JWT. Thành công chỉ có nghĩa password step đã đúng; chưa phải xác thực hoàn tất.
+Endpoint chỉ xác minh email/password và tạo pending challenge. Nó **không sinh OTP, không gọi SMTP và không cấp JWT**.
 
 ### Request
-
-```http
-POST /api/auth/login
-Content-Type: application/json
-```
 
 ```json
 {
@@ -141,20 +94,12 @@ Content-Type: application/json
 }
 ```
 
-| Field | Kiểu | Bắt buộc | Validation |
-|---|---|---:|---|
-| `email` | string | Có | Trim, format hợp lệ, tối đa 254 ký tự. |
-| `password` | string | Có | 8-128 ký tự; không trim/normalize; không log. |
+| Field | Validation |
+|---|---|
+| `email` | Required, email hợp lệ, tối đa 254 ký tự; được trim. |
+| `password` | Required, 8-128 ký tự, không chỉ có khoảng trắng. |
 
-### Xử lý
-
-1. Middleware rate limit theo IP/endpoint; service validate và normalize email.
-2. Tìm User, kiểm tra `IsActive`, verify `PasswordHash`; email không tồn tại dùng dummy hash để giảm timing leak.
-3. Nếu thất bại, ghi `LOGIN_PASSWORD_FAILED`, không tạo challenge và trả cùng một lỗi chung.
-4. Nếu đúng, revoke open login challenge trước và tạo pending challenge mới với GUID ngẫu nhiên, flow TTL 10 phút, `OtpHash = null`, `SentAt = null`, `ExpiresAt = null`, `ResendCount = 0`, `MaxAttempts = 5`.
-5. Commit challenge cùng audit `LOGIN_PASSWORD_SUCCESS`, rồi trả metadata pending. Không tạo OTP/email/JWT trong request này.
-
-### Response thành công - `200 OK`
+### Success — `200 OK`
 
 ```json
 {
@@ -163,33 +108,25 @@ Content-Type: application/json
   "purpose": "LOGIN",
   "otpSent": false,
   "maskedEmail": "st***@example.com",
-  "flowExpiresAt": "2026-08-22T13:10:00Z"
+  "flowExpiresAt": "2026-08-31T10:10:00Z"
 }
 ```
 
-Không trả OTP, OTP hash, email đầy đủ, UserId hoặc JWT. Client chuyển sang State A, chỉ hiện nút **Gửi mã xác thực** và giữ `challengeId` trong memory.
+Pending challenge chưa có `OtpHash`, `ExpiresAt` hoặc `SentAt`, vì vậy chưa thể verify.
 
-### Lỗi
+### Lỗi riêng
 
-| Status | Code | Điều kiện |
+| Status | Code | Khi nào |
 |---:|---|---|
-| `400` | `VALIDATION_ERROR` | Email/password thiếu hoặc vượt giới hạn. |
-| `401` | `INVALID_CREDENTIALS` | Email lạ, password sai hoặc tài khoản inactive; cùng title/message. |
-| `429` | `RATE_LIMITED` | Vượt giới hạn login theo IP; có `Retry-After` khi có thể. |
-| `500` | `INTERNAL_ERROR` | Lỗi không dự đoán đã sanitize. |
+| `401` | `INVALID_CREDENTIALS` | Email lạ, password sai hoặc User inactive; cùng một message. |
 
-### Invariant bảo mật
+Rate limit: 5 request/60 giây/IP.
 
-- Password sai không tạo `OtpChallenge` và không phát email.
-- Password đúng cũng không cấp JWT.
-- Một login thành công mới làm challenge login trước mất hiệu lực.
-- Pending challenge có identifier GUID ngẫu nhiên và chưa thể verify vì chưa có `SentAt`/`OtpHash`/`ExpiresAt`.
+## 5. `POST /api/auth/send-otp`
 
-## 6. `POST /api/auth/send-otp`
+**Authentication:** Không yêu cầu Bearer token; quyền first send được ràng buộc bởi pending challenge sinh sau password verification.
 
-### Mục đích
-
-Sinh và gửi OTP lần đầu sau khi password đã được xác minh. Endpoint chỉ nhận `challengeId`; server tự lấy User và email từ challenge.
+Request không nhận email/UserId. Server luôn lấy người nhận từ User gắn với challenge.
 
 ### Request
 
@@ -199,16 +136,18 @@ Sinh và gửi OTP lần đầu sau khi password đã được xác minh. Endpoi
 }
 ```
 
+`challengeId` là UUID bắt buộc.
+
 ### Xử lý
 
-1. Áp dụng policy riêng theo IP: 3 request/300 giây.
-2. Kiểm tra challenge tồn tại, purpose `LOGIN`, User active, chưa consume/revoke/hết flow và đang ở trạng thái pending chưa từng gửi.
-3. Chuẩn bị OTP 6 chữ số bằng CSPRNG, HMAC với key riêng, TTL tối đa 3 phút và attempt count 0; persist prepared state cùng `OTP_SEND_REQUESTED`/`OTP_CREATED` trước network call.
-4. Gửi OTP plaintext tạm thời qua SMTP tới `User.Email`; client không quyết định người nhận.
-5. Chỉ sau SMTP success mới chuyển challenge prepared sang sent bằng `SentAt`, ghi `OTP_SENT`, rồi trả metadata timer.
-6. Nếu delivery hoặc persistence cuối thất bại, fail closed/revoke; trả lỗi sanitize và không để một OTP chưa nhận có thể verify.
+1. Validate challenge `LOGIN`, User active, flow còn hạn và đúng pending state.
+2. Sinh OTP 6 chữ số bằng CSPRNG, lưu HMAC/expiration ở prepared state.
+3. Gửi OTP tạm thời qua MailKit tới `User.Email`.
+4. Sau SMTP success mới set `SentAt` và trả success.
 
-### Response thành công - `200 OK`
+First send lần hai trên cùng challenge bị từ chối; client phải dùng resend flow sau khi OTP đã sent.
+
+### Success — `200 OK`
 
 ```json
 {
@@ -216,113 +155,71 @@ Sinh và gửi OTP lần đầu sau khi password đã được xác minh. Endpoi
   "purpose": "LOGIN",
   "otpSent": true,
   "maskedEmail": "st***@example.com",
-  "expiresAt": "2026-08-22T13:03:00Z",
-  "flowExpiresAt": "2026-08-22T13:10:00Z",
-  "resendAvailableAt": "2026-08-22T13:01:00Z"
+  "expiresAt": "2026-08-31T10:03:00Z",
+  "flowExpiresAt": "2026-08-31T10:10:00Z",
+  "resendAvailableAt": "2026-08-31T10:01:00Z"
 }
 ```
 
-### Lỗi
+### Lỗi riêng
 
-| Status | Code | Điều kiện |
+| Status | Code | Khi nào |
 |---:|---|---|
-| `400` | `VALIDATION_ERROR` | `challengeId` thiếu/sai format. |
-| `400` | `OTP_SEND_NOT_AVAILABLE` | Challenge không hợp lệ, không còn pending hoặc đã first-send; lỗi chung. |
-| `429` | `RATE_LIMITED` | Vượt policy send-otp theo IP. |
-| `503` | `OTP_DELIVERY_UNAVAILABLE` | SMTP thất bại; challenge fail closed/revoke. |
-| `500` | `INTERNAL_ERROR` | Lỗi không dự đoán đã sanitize. |
+| `400` | `OTP_SEND_NOT_AVAILABLE` | Challenge lạ, invalid/revoked/consumed/expired, không còn pending hoặc đã first-send. |
+| `503` | `OTP_DELIVERY_UNAVAILABLE` | SMTP hoặc finalize sent state thất bại; challenge được xử lý fail closed. |
 
-First send không thay thế resend. Sau khi `SentAt` được thiết lập, gọi lại endpoint này bị từ chối; client phải dùng `/resend-otp` và tuân cooldown.
+Rate limit: 3 request/300 giây/IP.
 
-## 7. `POST /api/auth/verify-otp`
+## 6. `POST /api/auth/verify-otp`
 
-### Mục đích
-
-Xác minh OTP cho challenge login. Chỉ endpoint này được trả JWT và chỉ sau khi OTP được consume/commit đúng một lần.
+**Authentication:** Không yêu cầu Bearer token. JWT chỉ được tạo trong success response của endpoint này.
 
 ### Request
-
-```http
-POST /api/auth/verify-otp
-Content-Type: application/json
-```
 
 ```json
 {
   "challengeId": "b3bb189f-8bf9-4a52-a8c8-fcba5db4f88f",
-  "otp": "<6-digit-otp>"
+  "otp": "000123"
 }
 ```
 
-| Field | Kiểu | Bắt buộc | Validation |
-|---|---|---:|---|
-| `challengeId` | UUID string | Có | UUID hợp lệ; do server cấp. |
-| `otp` | string | Có | Regex `^[0-9]{6}$`; không log. |
+| Field | Validation |
+|---|---|
+| `challengeId` | UUID bắt buộc. |
+| `otp` | String bắt buộc, regex `^[0-9]{6}$`. |
 
-Request không nhận email, UserId hoặc Purpose. OTP sai định dạng bị validation từ chối và không tăng `AttemptCount`, nhưng vẫn chịu endpoint rate limiter.
+OTP sai định dạng bị model validation từ chối trước service và không tăng `AttemptCount`; request vẫn chịu rate limit HTTP.
 
-### Xử lý theo thứ tự
-
-1. Middleware rate limit theo IP/endpoint; DTO validation giữ `challengeId`/OTP trong allowlist. Hard limit theo challenge được thực thi bằng `AttemptCount`/`MaxAttempts`.
-2. Load challenge `LOGIN` và User bằng server state.
-3. Từ chối nếu OTP chưa được gửi (`SentAt`, `OtpHash` hoặc `ExpiresAt` chưa có), challenge không tồn tại, đã revoke/consume/locked hoặc User inactive.
-4. Từ chối và audit `OTP_EXPIRED` nếu `now >= ExpiresAt`.
-5. Tái tính HMAC và so sánh fixed-time.
-6. OTP sai: tăng attempt atomically, audit `OTP_VERIFY_FAILED`; lần sai thứ 5 đồng thời revoke challenge.
-7. OTP đúng: conditional update `ConsumedAt` và audit `OTP_VERIFY_SUCCESS` trong transaction.
-8. Chỉ sau commit thành công mới tạo JWT TTL 15 phút.
-
-### Response thành công - `200 OK`
+### Success — `200 OK`
 
 ```json
 {
   "accessToken": "<jwt>",
   "tokenType": "Bearer",
   "expiresIn": 900,
-  "expiresAt": "2026-08-22T13:15:00Z"
+  "expiresAt": "2026-08-31T10:18:00Z"
 }
 ```
 
-JWT tối thiểu có:
+Trước khi cấp JWT, server yêu cầu challenge đã sent, đúng purpose, User active, còn hạn/lượt, chưa consumed/revoke; OTP HMAC phải khớp và `ConsumedAt` phải persist thành công.
 
-- `sub`: User ID.
-- `jti`: token ID ngẫu nhiên.
-- `iat`, `exp`: issued/expiration time.
-- `iss`, `aud`: issuer và audience theo configuration.
+### Lỗi riêng
 
-Không đưa password, OTP, OTP hash, signing key hoặc thông tin nội bộ vào claims.
-
-### Lỗi
-
-| Status | Code | Điều kiện |
+| Status | Code | Message/ý nghĩa |
 |---:|---|---|
-| `400` | `VALIDATION_ERROR` | `challengeId`/OTP sai format. |
-| `400` | `OTP_NOT_SENT` | Pending challenge chưa hoàn tất first send. |
-| `400` | `OTP_VERIFICATION_FAILED` | OTP không khớp hoặc challenge không hợp lệ chung. |
-| `400` | `OTP_EXPIRED` | OTP đã hết hạn. |
-| `400` | `OTP_NOT_CURRENT` | Challenge đã consume/revoke/replay hoặc không còn là mã mới nhất. |
-| `400` | `OTP_MAX_ATTEMPTS` | Đã đạt giới hạn số lần sai. |
-| `429` | `RATE_LIMITED` | Vượt endpoint limiter; hard limit 5 OTP sai/challenge vẫn độc lập. |
-| `500` | `INTERNAL_ERROR` | Lỗi không dự đoán; không trả stack trace. |
+| `400` | `OTP_NOT_SENT` | OTP chưa được gửi. |
+| `400` | `OTP_VERIFICATION_FAILED` | OTP không chính xác hoặc challenge không hợp lệ chung. |
+| `400` | `OTP_EXPIRED` | OTP hoặc authentication flow đã hết hạn. |
+| `400` | `OTP_NOT_CURRENT` | Challenge đã consume/revoke/replay hoặc không còn current. |
+| `400` | `OTP_MAX_ATTEMPTS` | Đã đạt tối đa 5 lần sai. |
 
-Audit giữ reason code nội bộ để phân biệt sai mã, hết hạn, replay và max attempts; client không nhận chi tiết này.
+Rate limit: 10 request/60 giây/IP, đồng thời có hard limit 5 OTP sai/challenge.
 
-### Concurrency
+## 7. `POST /api/auth/resend-otp`
 
-Hai request dùng OTP đúng đồng thời phải tranh conditional consume/`RowVersion`. Chỉ request commit `ConsumedAt` được nhận JWT; request còn lại trả `400 OTP_NOT_CURRENT`. JWT không được tạo “trước để dành”.
-
-## 8. `POST /api/auth/resend-otp`
-
-### Mục đích
-
-Gửi OTP hoàn toàn mới cho một password login đang chờ, đồng thời vô hiệu challenge/mã cũ.
+**Authentication:** Không yêu cầu Bearer token; server resolve User/email từ sent challenge hiện tại.
 
 ### Request
-
-```http
-POST /api/auth/resend-otp
-Content-Type: application/json
-```
 
 ```json
 {
@@ -330,85 +227,46 @@ Content-Type: application/json
 }
 ```
 
-| Field | Kiểu | Bắt buộc | Validation |
-|---|---|---:|---|
-| `challengeId` | UUID string | Có | UUID hiện tại do server cấp. |
+`challengeId` là UUID bắt buộc. Endpoint không nhận email, UserId hoặc OTP cũ.
 
-Endpoint không nhận email, UserId, OTP cũ, `MaxAttempts` hay TTL từ client.
+Challenge phải đã sent, chưa consumed/revoke/lock, còn flow và còn lượt resend. Cooldown là 60 giây từ `SentAt`. Resend revoke challenge cũ và tạo replacement với OTP mới.
 
-### Điều kiện resend
-
-- Challenge là open challenge `LOGIN` hiện tại của User.
-- Challenge phải ở trạng thái sent: có `SentAt`, `OtpHash` và `ExpiresAt`.
-- Chưa consumed, chưa revoked và `AttemptCount < MaxAttempts`.
-- Đã qua cooldown 60 giây từ `SentAt`.
-- Qua rate limit theo IP; cooldown và resend count theo flow vẫn được kiểm tra độc lập.
-- `now < FlowExpiresAt` và `ResendCount < 3`.
-- Challenge OTP expired được phép resend khi flow còn hạn/lượt; challenge đã khóa, flow hết 10 phút hoặc đã resend 3 lần phải login password lại.
-
-### Xử lý
-
-1. Middleware limit theo IP; service validate/load rồi kiểm tra cooldown, resend count và state/concurrency.
-2. Revoke challenge cũ.
-3. Chuẩn bị OTP/challenge thay thế, giữ `AuthenticationFlowId`/`FlowExpiresAt`, tăng `ResendCount`, đặt TTL mới và attempt count về 0.
-4. Revoke challenge cũ và insert challenge replacement ở trạng thái prepared trong transaction.
-5. `OTP_CREATED` được persist cùng prepared replacement trước SMTP. Sau delivery thành công mới đặt `SentAt`, ghi `OTP_SENT` và `OTP_RESEND_SUCCESS`; client nhận challenge ID mới.
-6. Nếu delivery thất bại, không phục hồi challenge cũ, trả `503` và thực hiện best-effort revoke challenge mới. Process/compensation lỗi có thể để row open đến TTL/flow expiry.
-
-### Response thành công - `200 OK`
+### Success — `200 OK`
 
 ```json
 {
   "challengeId": "51c4335b-172a-44c0-b6db-520b90e938a9",
   "purpose": "LOGIN",
-  "expiresAt": "2026-08-22T13:05:00Z",
-  "flowExpiresAt": "2026-08-22T13:10:00Z",
-  "resendAvailableAt": "2026-08-22T13:03:00Z"
+  "expiresAt": "2026-08-31T10:05:00Z",
+  "flowExpiresAt": "2026-08-31T10:10:00Z",
+  "resendAvailableAt": "2026-08-31T10:03:00Z"
 }
 ```
 
-Client phải thay challenge ID cũ bằng ID mới. Mã/challenge cũ bị từ chối ngay cả khi email chứa mã cũ đến sau email mới.
+Client phải thay challenge ID cũ bằng ID mới. OTP/challenge cũ bị từ chối kể cả khi TTL cũ chưa hết.
 
-### Lỗi
+### Lỗi riêng
 
-| Status | Code | Điều kiện |
+| Status | Code | Khi nào |
 |---:|---|---|
-| `400` | `VALIDATION_ERROR` | `challengeId` sai format. |
-| `400` | `RESEND_NOT_AVAILABLE` | Challenge lạ/không hiện tại, consumed, revoked, locked, hết flow/lượt hoặc User inactive; cùng message chung. |
-| `429` | `RESEND_COOLDOWN` | Chưa đủ 60 giây; trả `Retry-After`. |
-| `429` | `RATE_LIMITED` | Vượt policy theo IP; trả `Retry-After` khi có thể. |
-| `503` | `OTP_DELIVERY_UNAVAILABLE` | SMTP failure; server thực hiện best-effort revoke challenge mới. |
-| `500` | `INTERNAL_ERROR` | Lỗi không dự đoán đã sanitize. |
+| `400` | `RESEND_NOT_AVAILABLE` | Challenge không hợp lệ/current, pending, consumed, revoked, locked, hết flow hoặc hết lượt resend. |
+| `429` | `RESEND_COOLDOWN` | Chưa qua 60 giây; có header `Retry-After` và extension `retryAfterSeconds`. |
+| `503` | `OTP_DELIVERY_UNAVAILABLE` | SMTP/finalize thất bại; replacement được best-effort revoke và challenge cũ không được phục hồi. |
 
-Hai resend đồng thời phải kết thúc với tối đa một challenge open; request thua concurrency reload state và trả `400 RESEND_NOT_AVAILABLE`, không gửi/return challenge thứ hai còn hiệu lực.
+Rate limit: 3 request/300 giây/IP, độc lập với cooldown và giới hạn 3 resend/flow.
 
-## 9. `GET /api/auth/me` - protected API
+## 8. `GET /api/auth/me`
 
-### Mục đích
-
-Chứng minh JWT authentication/authorization hoạt động và trả hồ sơ công khai của chính người dùng.
-
-### Request
+**Authentication:** Bắt buộc Bearer JWT.
 
 ```http
 GET /api/auth/me
 Authorization: Bearer <jwt>
 ```
 
-Endpoint không nhận UserId từ query/body. UserId luôn lấy từ claim `sub` sau khi JWT middleware xác minh token.
+JWT middleware kiểm tra signature HS256, issuer, audience, lifetime và expiration với clock skew 30 giây. Action lấy User ID từ claim `sub` và đọc lại database để bảo đảm User còn active.
 
-### Kiểm tra token
-
-- Header dùng đúng Bearer scheme.
-- Signature hợp lệ với signing key được cấu hình.
-- Thuật toán đúng HS256; không chấp nhận thuật toán khác/`none`.
-- Issuer và audience khớp.
-- Token chưa hết hạn, với clock skew tối đa 30 giây.
-- `sub` là UUID hợp lệ và User tương ứng còn `IsActive`.
-
-Active-user policy này phải được tái sử dụng trên mọi protected endpoint để disable tài khoản có hiệu lực ngay dù JWT chưa hết hạn.
-
-### Response thành công - `200 OK`
+### Success — `200 OK`
 
 ```json
 {
@@ -420,100 +278,44 @@ Active-user policy này phải được tái sử dụng trên mọi protected e
 
 ### Lỗi
 
-| Status | Code | Điều kiện |
+| Status | Code | Khi nào |
 |---:|---|---|
-| `401` | `UNAUTHORIZED` | Thiếu token, token sai signature/issuer/audience, malformed hoặc hết hạn. |
+| `401` | `UNAUTHORIZED` hoặc body rỗng | Thiếu/token không hợp lệ được JWT middleware trả Problem Details `UNAUTHORIZED`; claim `sub` không parse được bị action từ chối bằng bare `401`. |
 | `403` | `ACCOUNT_INACTIVE` | Token hợp lệ nhưng User không còn tồn tại/active. |
-| `500` | `INTERNAL_ERROR` | Lỗi không dự đoán đã sanitize. |
 
-Response `401` có `WWW-Authenticate: Bearer` nhưng không mô tả chi tiết lỗi chữ ký cho client.
+## 9. JWT và protected flow
 
-## 10. JWT và logout
+- Algorithm: HS256; validator chỉ cho phép HS256 và signed token.
+- Issuer: `OTPAuth.API` theo configuration hiện tại.
+- Audience: `OTPAuth.Client` theo configuration hiện tại.
+- Lifetime: 15 phút; clock skew 30 giây.
+- Signing key: `Jwt:SigningKey`, Base64 tối thiểu 256 bit và khác `Otp:HashingKey`.
+- Không có refresh token hoặc server-side logout/revocation.
 
-- Access token TTL mặc định 15 phút, không có refresh token.
-- Signing key HS256 ngẫu nhiên tối thiểu 256 bit, tách khỏi OTP HMAC key và không hard-code/commit.
-- UI demo Phase 12 lưu access token trong `sessionStorage` để giới hạn theo phiên tab; không đưa token vào URL, DOM hiển thị hoặc console.
-- Logout của demo chỉ xóa token phía client. Token bị đánh cắp hoặc bản sao token vẫn hợp lệ đến `exp`.
-- Nếu cần revoke tức thời khi logout/disable User, phải bổ sung token denylist/security stamp trong yêu cầu tương lai; không tự mở rộng Phase 0.
+UI chỉ lưu access token trong `sessionStorage`; không đưa token vào URL hoặc console. Logout xóa token phía client.
 
-## 11. Rate limit và header
+## 10. Audit theo endpoint
 
-Giá trị khởi đầu đồng bộ với `REQUIREMENTS.md`:
-
-| Endpoint | Giới hạn đề xuất |
-|---|---|
-| Register | Fixed window 5 request/giờ/IP. |
-| Login | Fixed window 5 request/phút/IP. |
-| Send OTP lần đầu | Fixed window 3 request/5 phút/IP; chỉ pending challenge được gửi một lần. |
-| Verify OTP | Fixed window 10 request/phút/IP, cộng hard limit 5 OTP sai/challenge. |
-| Resend OTP | Fixed window 3 request/5 phút/IP, cộng cooldown 60 giây. |
-| Phát OTP chung | Quota theo User qua first send/resend là mục tiêu phase sau, chưa hiện thực. |
-
-Middleware sau Phase 13 áp dụng fixed-window quota theo IP/endpoint, dùng `HttpContext.Connection.RemoteIpAddress` và fallback `unknown` khi IP null; middleware không đọc/log body password hoặc OTP và không tin `X-Forwarded-For` khi chưa có trusted proxy. Quota theo normalized email/challenge/User và quota phát OTP dùng chung vẫn chưa được hiện thực.
-
-Ví dụ response rate limit:
-
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 60
-Cache-Control: no-store
-Content-Type: application/problem+json
-```
-
-Partition key chứa email không được ghi ra log. Deployment sau reverse proxy chỉ tin `X-Forwarded-For` từ proxy được cấu hình tin cậy.
-
-## 12. Audit theo endpoint
-
-| Endpoint/tình huống | Event tối thiểu |
+| Tình huống | Event chính |
 |---|---|
 | Register thành công | `REGISTER_SUCCESS` |
-| Login password đúng/pending challenge được tạo | `LOGIN_PASSWORD_SUCCESS` |
-| Login password sai/inactive/unknown | `LOGIN_PASSWORD_FAILED` |
-| Yêu cầu first send hợp lệ | `OTP_SEND_REQUESTED` |
-| OTP prepared cho first send | `OTP_SEND_REQUESTED`, `OTP_CREATED` |
-| First send hoàn tất | `OTP_SENT` |
-| Verify OTP sai | `OTP_VERIFY_FAILED`; bắt buộc thêm `OTP_MAX_ATTEMPTS_REACHED` khi đạt 5 |
-| Verify challenge expired | Chỉ `OTP_EXPIRED` cho request đó |
-| Verify thành công | `OTP_VERIFY_SUCCESS`, sau khi cấp JWT ghi `JWT_ISSUED` |
-| Verify replay | `OTP_REPLAY_REJECTED` |
-| Resend prepared | `OTP_CREATED` |
-| Resend delivery/finalize thành công | `OTP_SENT`, `OTP_RESEND_SUCCESS` |
-| Resend không khả dụng/cooldown/delivery fail | `OTP_RESEND_FAILED` với reason code allowlist |
-| SMTP lỗi | Bắt buộc `OTP_DELIVERY_FAILED` |
-| Rate limit | Không ghi audit per-request để tránh log flood |
+| Login đúng/sai | `LOGIN_PASSWORD_SUCCESS` / `LOGIN_PASSWORD_FAILED` |
+| First send prepared/sent | `OTP_SEND_REQUESTED`, `OTP_CREATED`, `OTP_SENT` |
+| Delivery lỗi | `OTP_DELIVERY_FAILED` |
+| Verify sai/hết hạn/replay/max attempts | `OTP_VERIFY_FAILED`, `OTP_EXPIRED`, `OTP_REPLAY_REJECTED`, `OTP_MAX_ATTEMPTS_REACHED` |
+| Verify thành công/JWT | `OTP_VERIFY_SUCCESS`, `JWT_ISSUED` |
+| Resend thành công/thất bại | `OTP_RESEND_SUCCESS`, `OTP_RESEND_FAILED` |
 
-Audit không chứa email/password request thô, password hash, OTP, OTP hash, JWT, Authorization header, SMTP credential hoặc raw exception.
+Audit không chứa password, `PasswordHash`, OTP, `OtpHash`, JWT, Authorization header, SMTP password hoặc raw exception.
 
-## 13. Swagger/OpenAPI
+## 11. Rate limiting và giới hạn hiện tại
 
-- Mô tả rõ login chỉ hoàn thành password step và không trả JWT.
-- Khai báo Bearer security scheme cho `GET /api/auth/me`.
-- Năm auth endpoint anonymous không được gắn security requirement nhầm.
-- Example dùng placeholder `<password>`, `<6-digit-otp>`, `<jwt>`; không dùng secret thật.
-- Swagger UI chỉ bật theo môi trường/configuration phù hợp và không chứa credential mặc định.
-- Schema response tuyệt đối không expose `PasswordHash`, `OtpHash`, `AttemptCount` hoặc internal reason code.
-- Phase triển khai phải tùy chỉnh model-validation, JWT challenge và rate-limit rejection để tất cả vẫn theo Problem Details contract này thay vì body mặc định khác nhau của framework.
+| Endpoint | Permit | Window | Partition |
+|---|---:|---:|---|
+| Register | 5 | 3600 giây | Remote IP |
+| Login | 5 | 60 giây | Remote IP |
+| Send OTP | 3 | 300 giây | Remote IP |
+| Verify OTP | 10 | 60 giây | Remote IP |
+| Resend OTP | 3 | 300 giây | Remote IP |
 
-## 14. Ma trận yêu cầu bảo mật API
-
-| Yêu cầu | Contract bảo đảm |
-|---|---|
-| Password không lộ/lưu plaintext | Request field không log; register response không trả password/hash. |
-| OTP không lộ/lưu plaintext | Login/send/resend response chỉ có metadata; prepared/sent row chỉ lưu HMAC, không plaintext. |
-| Expiration/single-use/replay | Verify check expiry/state và conditional consume trước JWT. |
-| Max attempts | Verify có hard limit 5; resend không reset challenge đã khóa. |
-| First send/resend an toàn | Cả hai chỉ nhận challenge ID; first send một lần, resend có cooldown/rate limit, revoke cũ và trả ID mới. |
-| Không JWT trước OTP | Register/login/send/resend schemas không có token; token chỉ có trong verify `200`. |
-| JWT expiration | Response có `expiresIn`/`expiresAt`; protected endpoint validate lifetime. |
-| Input validation | DTO allowlist và bảng constraint rõ cho mọi field. |
-| Error handling | Problem Details chung, không stack trace/nội bộ. |
-| Secret leakage | Không secret trong schema/example; key/credential lấy từ configuration an toàn. |
-
-## 15. Vấn đề còn cần xử lý
-
-- Tạo OpenAPI thực tế và kiểm tra response schema ở Phase triển khai phù hợp.
-- Chốt issuer/audience theo môi trường và tạo key thật; giá trị không được đưa vào tài liệu/repository.
-- Đo/tinh chỉnh rate limit và quota phát email với SMTP provider thật.
-- Tiếp tục đánh giá XSS/CSP và chiến lược token storage nếu UI được nâng từ demo lên triển khai thực tế.
-- Theo dõi telemetry để đánh giá việc dùng các code trạng thái OTP an toàn có tạo thêm rủi ro enumeration trong môi trường triển khai thực tế hay không.
-- API/version tương lai cho refresh, revoke token, đổi password/email hoặc quản trị User nằm ngoài phạm vi hiện tại.
+Limiter hiện là fixed-window in-memory cho một application instance. Chưa có quota theo normalized email/User hoặc issuance budget dùng chung cho first send và resend; đây là giới hạn đã biết, không phải control đã hiện thực.

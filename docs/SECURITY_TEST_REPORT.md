@@ -1,48 +1,86 @@
-# PHASE 11 - Security Test Report
+# Security Test Report
 
-## Phạm vi và cách chạy
+## 1. Phạm vi và cách chạy
 
-- Baseline trước Phase 11: 56 automated tests.
-- Phase 11 bổ sung 7 integration tests HTTP cho JWT, protected API và validation/error sanitization.
-- Phase 13 bổ sung regression tests cho form fallback, register rate limit, exception sanitization, request-size limit, JWT hardening, OTP expiration trong lúc xử lý/email delivery và concurrency trên SQL Server thật.
-- Security baseline Phase 13 từng đạt 80/80. Sau split-flow refactor, full suite bật SQL opt-in đạt **105/105 pass, 0 failed, 0 skipped**.
-- Phần lớn tests dùng EF Core InMemory, test-only JWT/HMAC key và FakeEmailService. Bốn test SQL chạy khi opt-in bằng `RUN_SQLSERVER_SECURITY_TESTS=1`; connection string lấy từ User Secrets/environment và dữ liệu test được cleanup đúng phạm vi.
+Test project dùng xUnit trên .NET 8. Inventory hiện tại có đúng **105 test cases**:
 
-## Kết quả
+- **101 standard cases**: unit test, EF Core InMemory, HTTP integration với `WebApplicationFactory`, fake email/JWT và kiểm tra static frontend.
+- **4 SQL Server opt-in cases**: chỉ chạy khi `RUN_SQLSERVER_SECURITY_TESTS=1`; nếu không, xUnit đánh dấu bốn case này là skipped.
 
-| Test case | Threat/control | Expected and actual result | Status |
+Chạy standard suite:
+
+```powershell
+dotnet test
+```
+
+Chạy toàn bộ suite với SQL Server đã apply migration và `DefaultConnection` được cấu hình ngoài repository:
+
+```powershell
+$env:RUN_SQLSERVER_SECURITY_TESTS = "1"
+dotnet test
+Remove-Item Env:\RUN_SQLSERVER_SECURITY_TESTS
+```
+
+Bốn SQL tests dùng record có định danh ngẫu nhiên và cleanup theo `UserId` trong `finally`. Chỉ chạy trên database test/development được phép ghi, không chạy trên production.
+
+Lượt verify cuối PHASE 14 ngày 2026-08-31 có kết quả:
+
+- Standard command: **101 passed, 0 failed, 4 SQL opt-in skipped, tổng 105**.
+- Bật `RUN_SQLSERVER_SECURITY_TESTS=1`: **105 passed, 0 failed, 0 skipped**.
+
+## 2. Inventory theo test source
+
+| Test file | Số case | Scenario được kiểm tra thực tế |
+|---|---:|---|
+| `UnitTest1.cs` | 1 | Test project tham chiếu đúng API assembly. |
+| `DatabaseModelTests.cs` | 3 | Entity không có password/OTP plaintext; pending challenge cho phép nullable đúng các delivery field. |
+| `RegistrationTests.cs` | 5 | Register hợp lệ lưu password hash; duplicate normalized email; DataAnnotation invalid input; trim email/full name. |
+| `LoginTests.cs` | 7 | Password đúng chỉ tạo pending challenge, không email/JWT; wrong/unknown/inactive không tạo challenge; login mới revoke open challenge cũ; validation. |
+| `OtpServiceTests.cs` | 9 | OTP 6 chữ số, leading zero, keyed hash/verify, pending state, first-send preparation, expiry boundary, consumed/revoked state và max attempts. |
+| `EmailDeliveryTests.cs` | 11 | First send dùng email server-side và OTP khớp hash; failure/expiry-during-send fail closed; second first-send bị chặn; invalid challenge/credentials; template và SMTP configuration diagnostics không lộ OTP/raw password. |
+| `OtpVerificationTests.cs` | 11 | OTP đúng consume + JWT; wrong OTP tăng attempt; lần sai thứ 5 khóa; expiry và expiry-during-processing; replay/consumed/revoked/not-sent/wrong-purpose/inactive/missing; DTO validation. |
+| `ResendOtpTests.cs` | 11 | Cooldown và boundary từ `SentAt`; pending/consumed/inactive/revoked reject; old OTP fail/new OTP pass; reset attempts; flow expiry/max resend; email failure fail closed; request validation. |
+| `AuditLoggingTests.cs` | 6 | Event login, first-send, delivery failure, verify/replay/JWT, resend/cooldown; AuditLog không có sensitive property; server metadata bị giới hạn độ dài. |
+| `RateLimitingTests.cs` | 8 | Threshold cho register/login/send/verify/resend và tính độc lập giữa các policy. |
+| `SecurityApiTests.cs` | 16 | Login/send response không có JWT/OTP/hash/full email; `/me` yêu cầu JWT; valid/invalid/expired JWT; validation/413/500 sanitization; HSTS; HS256-only; key separation; DTO allowlist. |
+| `StaticUiTests.cs` | 13 | Root/static assets, POST form fallback, session token handling, không DOM sink/log nhạy cảm, copy/accessibility, OTP string/states, responsive CSS và DOM hooks. |
+| `SqlServerConcurrencyTests.cs` | 4 | Hai verify đúng chỉ một JWT; concurrent wrong OTP dừng ở 5; concurrent first-send chỉ một email; repeated login revoke trước khi insert pending mới. |
+| **Tổng** | **105** | **101 standard + 4 SQL opt-in**. |
+
+## 3. Security scenario matrix
+
+Các dòng dưới đây chỉ ghi scenario có test tự động tương ứng trong repository.
+
+| Scenario | Threat/control | Expected result được assert | Test source |
 |---|---|---|---|
-| Valid/duplicate/normalized registration | Account duplication, password leakage | Một User được tạo với PasswordHasher hash; duplicate normalized email bị từ chối; input sai không được persist. | PASS |
-| Wrong/unknown/inactive login | Credential abuse | Không tạo challenge, không gửi email, không JWT. | PASS |
-| Correct password login | Premature delivery/token | Chỉ tạo pending challenge; `otpSent=false`, không SMTP và không JWT. | PASS |
-| First send OTP | Recipient tampering, send abuse | Chỉ nhận challengeId; lấy email từ User; second send bị chặn; failure fail closed; không OTP trong response. | PASS |
-| OTP generation and storage | Predictable OTP, plaintext persistence | OTP đúng 6 chữ số, có leading zero; source dùng RandomNumberGenerator.GetInt32; entity/response chỉ có HMAC. | PASS |
-| Valid OTP | Unauthorized authentication | ConsumedAt được persist, JWT hợp lệ chỉ được tạo sau verify. | PASS |
-| Wrong and expired OTP | Brute force, expired-code use | AttemptCount tăng khi mã sai; mã ở expiry boundary bị từ chối, không JWT. | PASS |
-| Replay OTP | OTP replay | VerifyOtpTwice_ShouldFailSecondAttempt: lần hai bị từ chối, không tạo JWT khác. | PASS |
-| Max attempts | OTP brute force | Lần sai thứ 5 revoke challenge; mã đúng sau đó vẫn bị từ chối. | PASS |
-| Revoked/wrong-purpose/inactive challenge | Authentication bypass | Challenge không phù hợp bị từ chối, không JWT. | PASS |
-| Challenge/User integrity | Client-selected identity | Verify request chỉ có ChallengeId và Otp; User được resolve từ challenge trên server. | PASS |
-| Resend and old OTP | OTP reuse after resend | Challenge cũ bị revoke, OTP cũ fail, OTP mới có thể verify. | PASS |
-| Resend cooldown/delivery fail | Resend abuse | Cooldown không tạo challenge/email mới; SMTP fake failure revoke challenge mới. | PASS |
-| JWT before OTP | Premature token issue | Login/pending và send response không có access token; JWT chỉ sau consume OTP. | PASS |
-| Valid/invalid/expired JWT and /me | Token forgery, expired token use | JWT valid trả profile tối thiểu; thiếu, malformed, signature sai hoặc expired trả 401. | PASS |
-| Rate limits | Login/send/OTP/resend flooding | Login 5/phút, send 3/5 phút, verify 10/phút, resend 3/5 phút vượt ngưỡng đều trả 429; policy độc lập. | PASS |
-| Register/body-size limits | Account/CPU spam, oversized body | Register vượt 5 request/giờ/IP trả 429; auth POST body trên 16 KiB trả 413. | PASS |
-| Audit event and sensitive fields | Missing audit, secret leakage | Kiểm tra login/verify/replay/resend event; AuditLog không có Password, OtpHash, token/JWT hoặc Authorization field. | PASS |
-| Validation and exception leakage | Malformed input/internal-data disclosure | Invalid request trả 400 VALIDATION_ERROR, không chứa SQL/connection string/MailKit/stack trace. | PASS |
-| Unexpected exception | Stack trace/secret leakage | Exception có chuỗi chẩn đoán nhạy cảm giả lập chỉ trả generic 500 `INTERNAL_ERROR`, `traceId`, `no-store`, `application/problem+json`; capture logger không có raw message/path/stack/secret. | PASS |
-| SQL Server opt-in: migration/model và concurrent OTP | Schema drift, double JWT, lost attempt | Full suite bật opt-in chạy đủ 4 test SQL: consume đúng, wrong-attempt, first-send race và repeated login. | PASS |
-| Browser/JWT hardening | Clickjacking, algorithm confusion, key reuse | CSP/header an toàn, HSTS ngoài development, HS256-only validation và startup từ chối dùng chung OTP/JWT key. | PASS |
+| Valid/duplicate registration | Password leakage, duplicate account | Password không lưu plaintext; normalized duplicate bị từ chối. | `RegistrationTests`, `DatabaseModelTests` |
+| Wrong/unknown/inactive login | Credential abuse, enumeration | Không tạo challenge, email hoặc JWT. | `LoginTests`, `EmailDeliveryTests` |
+| Correct password login | Premature OTP/JWT | Chỉ tạo pending challenge; `otpSent=false`; không gọi email/JWT service. | `LoginTests`, `SecurityApiTests` |
+| First send | Recipient tampering, resend bypass | Chỉ nhận challenge ID; server dùng User email; response không có OTP/JWT; lần gọi thứ hai fail. | `EmailDeliveryTests`, `SecurityApiTests` |
+| First-send delivery failure | Success giả, OTP không nhận được vẫn verify | Failure hoặc OTP hết hạn trong delivery revoke/fail closed và không trả success. | `EmailDeliveryTests`, `AuditLoggingTests` |
+| OTP generation/storage | Predictable/plaintext OTP | Output đúng 6 chữ số, giữ leading zero; entity chỉ lưu keyed hash. | `OtpServiceTests`, `DatabaseModelTests` |
+| Verify trước send | Authentication bypass | Pending challenge trả NotSent, attempt không tăng, không JWT. | `OtpVerificationTests` |
+| Wrong OTP | Brute force | Bị từ chối, `AttemptCount` tăng, không consume/JWT. | `OtpVerificationTests` |
+| Expired OTP | Expired-code use | Boundary `now >= ExpiresAt` và mã hết hạn trong lúc xử lý đều bị từ chối. | `OtpServiceTests`, `OtpVerificationTests`, `EmailDeliveryTests` |
+| Max attempts | OTP brute force | Lần sai thứ 5 revoke; mã đúng sau đó vẫn fail. | `OtpServiceTests`, `OtpVerificationTests` |
+| Replay/consumed/revoked OTP | OTP reuse | Verify lần hai hoặc challenge terminal bị từ chối; không JWT thứ hai. | `OtpVerificationTests`, `AuditLoggingTests` |
+| Resend | OTP reuse, resend abuse | Cooldown được enforce; challenge cũ revoke; OTP cũ fail, OTP mới pass; limit flow/resend được enforce. | `ResendOtpTests` |
+| JWT before OTP | Authentication bypass | Login, pending và send response không có token; JWT chỉ sau successful consume. | `LoginTests`, `EmailDeliveryTests`, `OtpVerificationTests`, `SecurityApiTests` |
+| Protected API/JWT validation | Forged/expired/missing token | `/me` chỉ trả profile tối thiểu với JWT hợp lệ; thiếu, malformed hoặc expired token trả 401. | `SecurityApiTests` |
+| Rate limiting | Endpoint flooding | Vượt threshold của năm auth endpoints trả 429; policy không dùng chung nhầm. | `RateLimitingTests` |
+| Audit sensitive data | Secret leakage | Event cần thiết được ghi; entity audit không có password, OTP hash, JWT/token hoặc Authorization property. | `AuditLoggingTests` |
+| SMTP diagnostic leakage | OTP/App Password leakage | Missing/invalid config bị từ chối trước connect; captured diagnostic không chứa OTP hoặc raw invalid App Password. | `EmailDeliveryTests` |
+| Validation/error leakage | Stack trace/internal secret disclosure | Invalid/oversized/unexpected request trả ProblemDetails an toàn; response/log capture không lộ synthetic secret/path/raw exception message. | `SecurityApiTests` |
+| Frontend security contract | URL/storage/DOM leakage, clickjacking | POST form fallback; JWT chỉ sessionStorage; không localStorage/console/unsafe DOM sink; CSP/security headers và responsive hooks tồn tại. | `StaticUiTests`, `SecurityApiTests` |
+| SQL concurrency | Double JWT, lost attempt, double first-send, filtered unique insert ordering | Chỉ một JWT/email; attempts dừng đúng 5; repeated login revoke bản ghi open trước khi tạo replacement. | `SqlServerConcurrencyTests` |
 
-## Review tĩnh
+## 4. Giới hạn của test suite
 
-- Logging review: chỉ giữ log delivery với email đã mask, mã event audit và exception type + trace ID đã sanitize. Raw EF Core provider logging bị tắt trong bản demo; captured-log regression không có password, raw exception/path/stack, OTP, OTP HMAC, JWT, key, SMTP credential hoặc connection string.
-- Secret review: appsettings.json chỉ có placeholder rỗng; production keys/connection string được đọc qua configuration. User Secrets hiện có DefaultConnection, JWT signing key và OTP hashing key; không có file secret mới trong Git. Test keys là dữ liệu test-only sinh trong test.
-- SQL injection review: data access dùng EF Core LINQ; không tìm thấy FromSqlRaw, ExecuteSqlRaw, SqlQuery hoặc raw SQL nhận email/OTP/client input.
+- Static UI tests kiểm tra HTTP/HTML/CSS/JavaScript contract; chưa chạy browser automation tương tác DOM hoặc end-to-end trên thiết bị thật.
+- Không gửi email tới Gmail/mailbox thật trong automated suite. `FakeEmailService` kiểm tra orchestration và failure; SMTP configuration tests dừng trước network connection.
+- Rate-limit tests xác nhận threshold và policy partition, không chờ hết toàn bộ time window và không kiểm tra triển khai distributed/multi-instance.
+- Bốn SQL tests chỉ bao phủ các race quan trọng nêu trong inventory; các test còn lại chủ yếu dùng EF Core InMemory.
+- Không có test logout server-side/token revocation vì demo chỉ xóa JWT phía client và chưa triển khai denylist/refresh token.
+- Quota phát OTP dùng chung theo User/normalized email chưa được hiện thực nên không có test cho control đó.
 
-## Giới hạn đã biết
-
-- Không gửi email end-to-end tới mailbox thật trong lượt kiểm tra này để tránh phát sinh thư ngoài ý muốn; các flow delivery/failure được kiểm thử bằng fake deterministic, còn cấu hình SMTP thật không xuất hiện trong source.
-- Bốn SQL tests là opt-in để không vô tình ghi vào database ở môi trường chưa được cho phép. Lượt kiểm tra cuối đã bật opt-in và chạy toàn bộ suite: 105/105 pass, gồm đủ bốn test SQL Server.
-- UI Phase 12 được kiểm thử same-origin ở mức HTTP/static contract; chưa chạy browser automation nhập OTP từ mailbox thật.
+Các giới hạn này không được diễn giải thành PASS cho Gmail delivery thật, browser E2E, distributed rate limiting hoặc server-side JWT revocation.
