@@ -22,7 +22,7 @@ Không thực hiện thay đổi kiến trúc lớn, không đổi SQL Server/En
 - Kiểm tra log, audit event, exception response, cache policy, HTTPS, CORS, security headers và rate-limit partition.
 - Kiểm tra frontend bằng static analysis cho Web Storage, DOM sink, raw error rendering, CSP, form fallback và authentication state.
 - Chạy dependency vulnerability review, regression test tự động và test concurrency SQL Server dạng opt-in khi môi trường phù hợp.
-- Security review gốc đã có lần chạy 80/80. Lượt verify PHASE 14 ngày 2026-08-31 đạt **101 pass, 4 SQL opt-in skip** với command chuẩn và **105/105 pass, 0 failed, 0 skipped** khi bật SQL opt-in, gồm đủ bốn test concurrency trên SQL Server thật.
+- Security review gốc đã có lần chạy 80/80. Lượt verify PHASE 14 ngày 2026-08-31 đạt **101 pass, 4 SQL opt-in skip** với command chuẩn và **105/105 pass, 0 failed, 0 skipped** khi bật SQL opt-in, gồm đủ bốn test concurrency trên SQL Server thật. Lượt verify PHASE 15 ngày 2026-09-06 trên .NET 10 lặp lại kết quả **105/105 pass, 0 failed, 0 skipped** khi bật SQL opt-in. Kiểm thử end-to-end với Gmail thật cũng xác nhận luồng `Login → Send OTP → Verify OTP → JWT → protected API`, đồng thời từ chối OTP sai, replay và lần gửi đầu tiên bị lặp.
 
 ## Findings Summary
 
@@ -55,10 +55,10 @@ Status: FIXED
 Severity: HIGH  
 Category: Vulnerable Dependency  
 Affected file: `tests/OTPAuth.Tests/OTPAuth.Tests.csproj`; dependency graph của test project  
-Description: Dependency transitive của test project kéo `System.Net.Http` 4.3.0 chịu ảnh hưởng bởi `GHSA-7jgj-8wvc-jh57` và `System.Text.RegularExpressions` 4.3.0 chịu ảnh hưởng bởi `GHSA-cmhx-cq75-c4mj`.  
+Description: Dependency graph cũ của test project từng kéo `System.Net.Http` 4.3.0 chịu ảnh hưởng bởi `GHSA-7jgj-8wvc-jh57` và `System.Text.RegularExpressions` 4.3.0 chịu ảnh hưởng bởi `GHSA-cmhx-cq75-c4mj`. Sau khi chuyển solution sang .NET 10, graph hiện tại không còn hai package legacy này.\
 Impact: Giữ package version có advisory làm dependency baseline không đạt yêu cầu và có thể gây rủi ro nếu asset runtime bị dùng ngoài dự kiến.  
 Attack scenario: Một test/tooling path nạp transitive runtime asset dễ tổn thương hoặc dependency này được tái sử dụng nhầm trong code chạy thực tế.  
-Remediation: Pin test-only `System.Net.Http` 4.3.4 và `System.Text.RegularExpressions` 4.3.1 với `PrivateAssets=all` và `ExcludeAssets=all`, sau đó chạy lại vulnerability scan.  
+Remediation: Nâng API/test lên `net10.0`, cập nhật dependency tương thích, loại bỏ hai direct pin legacy không còn cần thiết và chạy lại `dotnet list OTPAuthentication.sln package --vulnerable --include-transitive`. Lượt quét PHASE 15 ngày 2026-09-06 không phát hiện package có advisory trong cả API và test project.\
 Status: FIXED
 
 ### SEC-003
